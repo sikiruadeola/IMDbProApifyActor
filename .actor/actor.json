@@ -1,0 +1,20 @@
+{
+    "$schema": "https://apify.com/schemas/v1/actor.ide.json",
+    "actorSpecification": 1,
+    "name": "my-actor",
+    "title": "Playwright Test Runner",
+    "description": "Runs Playwright tests",
+    "version": "0.0",
+    "buildTag": "latest",
+    "meta": {
+        "templateId": "ts-playwright-test-runner",
+        "generatedBy": "<FILL-IN-MODEL>"
+    },
+    "storages": {
+        "dataset": "./dataset_schema.json",
+        "keyValueStore": "./key_value_store_schema.json"
+    },
+    "outputSchema": "./output_schema.json",
+    "inputSchema": "./input_schema.json",
+    "dockerfile": "../Dockerfile"
+}

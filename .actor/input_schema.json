@@ -1,0 +1,33 @@
+{
+    "$schema": "https://apify.com/schemas/v1/input.ide.json",
+    "title": "IMDbPro Director Contact Scraper",
+    "description": "Extract direct contact information from authorized IMDbPro director discovery results, processing discovery pages sequentially.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startPage": {
+            "title": "Start discovery page",
+            "type": "integer",
+            "description": "IMDbPro discovery page to start from. Use this to resume after a previous run.",
+            "default": 1,
+            "minimum": 1,
+            "editor": "number"
+        },
+        "maxPages": {
+            "title": "Maximum discovery pages",
+            "type": "integer",
+            "description": "Maximum number of discovery pages to process. Set to 0 to continue until the Actor run stops.",
+            "default": 0,
+            "minimum": 0,
+            "editor": "number"
+        },
+        "maxDirectors": {
+            "title": "Maximum director profiles",
+            "type": "integer",
+            "description": "Maximum number of director profiles to process in this run. Set to 0 for no artificial limit.",
+            "default": 0,
+            "minimum": 0,
+            "editor": "number"
+        }
+    }
+}
