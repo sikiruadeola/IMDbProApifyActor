@@ -550,7 +550,8 @@ Then create the key-value store schema in `.actor/key_value_store_schema.json`:
         "images": {
             "title": "Images",
             "description": "Images stored by the Actor",
-            "keyPrefix": "image-"
+            "keyPrefix": "image-",
+            "contentTypes": ["image/jpeg"]
         }
     }
 }
