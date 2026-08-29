@@ -854,9 +854,21 @@ while (true) {
         // SAVE IMMEDIATELY.
         // ---------------------------------------------------------------------
 
-        await Actor.pushData(
-            result,
-        );
+        if (
+            result.contactStatus === 'found'
+        ) {
+            const directContact =
+                result.directContactRaw
+                || result.contactEmail
+                || result.contactUrl;
+
+            if (directContact) {
+                await Actor.pushData({
+                    discoveryPage: result.discoveryPage,
+                    directContact,
+                });
+            }
+        }
 
         console.log(
             `Saved ${totalPeopleProcessed} / ${seenImdbIds.size}`,
