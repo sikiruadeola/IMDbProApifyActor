@@ -1,14 +1,22 @@
 {
     "$schema": "https://apify.com/schemas/v1/input.ide.json",
     "title": "IMDbPro Director Contact Scraper",
-    "description": "Extract direct contact information from authorized IMDbPro director discovery results, processing discovery pages sequentially.",
+    "description": "Extract direct contact information from authorized IMDbPro discovery results. Paste any authorized IMDbPro Discover People URL to choose the profession, Star Meter range, credit filters, sorting, and other discovery filters.",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
+        "startUrl": {
+            "title": "IMDbPro Start URL",
+            "type": "string",
+            "description": "Paste the complete IMDbPro Discover People URL you want to scrape. You can change this before any run. The Actor will preserve the filters in this URL, such as profession, Star Meter range, credit year, sorting, and other discovery settings.",
+            "editor": "textarea",
+            "minLength": 1,
+            "prefill": "https://pro.imdb.com/discover/people?creditCategoryId=amzn1.imdb.concept.name_credit_category.ace5cb4c-8708-4238-9542-04641e7c8171&hasEmploymentTrait=false&hasRepresentationTrait=false&hasCreditTrait=true&hasPerformanceTrait=false&hasActingTrait=false&hasMusicTrait=false&hasCreditCategoryRoles=true&profession=amzn1.imdb.concept.profession_category.c718155c-36c1-42ef-84ce-5dcb731e09b3&sortOrder=RELEVANCE&pageNumber=1&minNumOfReleasedCredits=1&creditBeginYear=2021&starMeterRangeMin=550000"
+        },
         "startPage": {
             "title": "Start discovery page",
             "type": "integer",
-            "description": "IMDbPro discovery page to start from. Use this to resume after a previous run.",
+            "description": "Discovery page number where this run should begin. The Actor updates only the pageNumber parameter while preserving the other filters from the Start URL.",
             "default": 1,
             "minimum": 1,
             "editor": "number"
@@ -22,12 +30,15 @@
             "editor": "number"
         },
         "maxDirectors": {
-            "title": "Maximum director profiles",
+            "title": "Maximum profiles",
             "type": "integer",
-            "description": "Maximum number of director profiles to process in this run. Set to 0 for no artificial limit.",
+            "description": "Maximum number of profiles to process in this run. Set to 0 for no artificial limit.",
             "default": 0,
             "minimum": 0,
             "editor": "number"
         }
-    }
+    },
+    "required": [
+        "startUrl"
+    ]
 }
