@@ -50,7 +50,7 @@ interface Input {
 }
 
 const DEFAULT_START_URL =
-    'https://pro.imdb.com/discover/people?creditCategoryId=amzn1.imdb.concept.name_credit_category.ace5cb4c-8708-4238-9542-04641e7c8171&hasEmploymentTrait=false&hasRepresentationTrait=false&hasCreditTrait=true&hasPerformanceTrait=false&hasActingTrait=false&hasMusicTrait=false&hasCreditCategoryRoles=true&profession=amzn1.imdb.concept.profession_category.c718155c-36c1-42ef-84ce-5dcb731e09b3&sortOrder=RELEVANCE&pageNumber=1&minNumOfReleasedCredits=1&creditBeginYear=2021&starMeterRangeMin=500000';
+    'https://pro.imdb.com/discover/people?creditCategoryId=amzn1.imdb.concept.name_credit_category.ace5cb4c-8708-4238-9542-04641e7c8171&hasEmploymentTrait=false&hasRepresentationTrait=false&hasCreditTrait=true&hasPerformanceTrait=false&hasActingTrait=false&hasMusicTrait=false&hasCreditCategoryRoles=true&profession=amzn1.imdb.concept.profession_category.c718155c-36c1-42ef-84ce-5dcb731e09b3&sortOrder=RELEVANCE&pageNumber=1&minNumOfReleasedCredits=1&creditBeginYear=2021&starMeterRangeMin=550000';
 
 const STORAGE_FILE = './imdb-auth-state.json';
 const PROGRESS_KEY = 'SCRAPER_PROGRESS';
