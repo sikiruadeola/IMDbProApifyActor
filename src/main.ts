@@ -179,16 +179,10 @@ async function getDirectContact(
             timeout: 15_000,
         });
 
-        // Give the Direct Contact UI time to render.
         await page.waitForTimeout(1_500);
-
-        // ---------------------------------------------------------------------
-        // Try Copy button.
-        // ---------------------------------------------------------------------
 
         let copyButton = await getCopyButton(page);
 
-        // IMDb occasionally renders the button slightly late.
         if (!copyButton) {
             console.log(
                 'Copy button not immediately available. Waiting...',
@@ -237,10 +231,6 @@ async function getDirectContact(
             );
         }
 
-        // ---------------------------------------------------------------------
-        // Read visible Direct Contact content.
-        // ---------------------------------------------------------------------
-
         let dialog: Locator | null = null;
 
         dialog = await findVisibleLocator(page, [
@@ -257,10 +247,6 @@ async function getDirectContact(
             );
         }
 
-        // ---------------------------------------------------------------------
-        // Fallback to page body.
-        // ---------------------------------------------------------------------
-
         if (!visibleText) {
             visibleText = normalizeText(
                 await page
@@ -269,10 +255,6 @@ async function getDirectContact(
                     .catch(() => ''),
             );
         }
-
-        // ---------------------------------------------------------------------
-        // Extract links.
-        // ---------------------------------------------------------------------
 
         const linkRoot =
             dialog ?? page.locator('body');
@@ -293,10 +275,6 @@ async function getDirectContact(
                 hrefs.push(href);
             }
         }
-
-        // ---------------------------------------------------------------------
-        // Combine extraction sources.
-        // ---------------------------------------------------------------------
 
         const combinedText = [
             clipboardText,
@@ -319,10 +297,6 @@ async function getDirectContact(
             }
         }
 
-        // ---------------------------------------------------------------------
-        // Successful contact extraction.
-        // ---------------------------------------------------------------------
-
         if (email || url || clipboardText) {
             return {
                 email,
@@ -332,13 +306,6 @@ async function getDirectContact(
                 error: null,
             };
         }
-
-        // ---------------------------------------------------------------------
-        // Important:
-        //
-        // Direct Contact opened successfully, but nothing usable was found.
-        // This is NOT an extraction error.
-        // ---------------------------------------------------------------------
 
         return {
             email: null,
@@ -406,7 +373,6 @@ async function processPerson(
     try {
         let loaded = false;
 
-        // Profile navigation gets one retry.
         for (let attempt = 1; attempt <= 2; attempt++) {
             try {
                 await page.goto(person.profileUrl, {
@@ -529,6 +495,7 @@ console.log('IMDbPro DIRECTOR CONTACT SCRAPER');
 console.log('==============================');
 
 console.log(`Starting page: ${startPage}`);
+
 console.log(
     `Maximum pages: ${
         maxPages === 0
@@ -536,6 +503,7 @@ console.log(
             : maxPages
     }`,
 );
+
 console.log(
     `Maximum profiles: ${
         maxDirectors === 0
@@ -610,7 +578,6 @@ let lastCompletedPage =
 let pageNumber = startPage;
 
 while (true) {
-    // maxPages = 0 means unlimited.
     if (
         maxPages > 0
         && pageNumber >= startPage + maxPages
@@ -622,7 +589,6 @@ while (true) {
         break;
     }
 
-    // maxDirectors = 0 means unlimited.
     if (
         maxDirectors > 0
         && totalPeopleProcessed >= maxDirectors
@@ -648,10 +614,6 @@ while (true) {
         String(pageNumber),
     );
 
-    // -------------------------------------------------------------------------
-    // Load discovery page with retry.
-    // -------------------------------------------------------------------------
-
     let discoveryLoaded = false;
 
     for (
@@ -663,8 +625,7 @@ while (true) {
             await discoveryPage.goto(
                 url.toString(),
                 {
-                    waitUntil:
-                        'domcontentloaded',
+                    waitUntil: 'domcontentloaded',
                     timeout: 120_000,
                 },
             );
@@ -710,10 +671,6 @@ while (true) {
         await discoveryPage.title(),
     );
 
-    // -------------------------------------------------------------------------
-    // Find people.
-    // -------------------------------------------------------------------------
-
     const nameLinks =
         discoveryPage.locator(
             'a[href*="/name/nm"]',
@@ -737,10 +694,6 @@ while (true) {
 
         break;
     }
-
-    // -------------------------------------------------------------------------
-    // Collect unique people from this page.
-    // -------------------------------------------------------------------------
 
     const peopleOnPage: Person[] = [];
 
@@ -817,10 +770,6 @@ while (true) {
         `UNIQUE PEOPLE ON PAGE ${pageNumber}: ${peopleOnPage.length}`,
     );
 
-    // -------------------------------------------------------------------------
-    // Process people one-by-one.
-    // -------------------------------------------------------------------------
-
     for (
         const person of peopleOnPage
     ) {
@@ -850,10 +799,6 @@ while (true) {
             totalPeopleWithContact++;
         }
 
-        // ---------------------------------------------------------------------
-        // SAVE IMMEDIATELY.
-        // ---------------------------------------------------------------------
-
         if (
             result.contactStatus === 'found'
         ) {
@@ -878,10 +823,6 @@ while (true) {
             `Contacts found so far: ${totalPeopleWithContact}`,
         );
     }
-
-    // -------------------------------------------------------------------------
-    // Only mark the page completed after its processing loop finishes.
-    // -------------------------------------------------------------------------
 
     lastCompletedPage =
         pageNumber;
