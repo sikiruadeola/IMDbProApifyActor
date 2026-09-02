@@ -5,8 +5,8 @@ import {
     type BrowserContext,
     type Page,
     type Locator,
+    type StorageState,
 } from 'playwright';
-import fs from 'node:fs';
 
 interface Person {
     imdbId: string;
@@ -45,11 +45,11 @@ interface Progress {
 
 interface Input {
     startUrl: string;
+    authState: string;
     maxPages?: number;
     maxDirectors?: number;
 }
 
-const STORAGE_FILE = './imdb-auth-state.json';
 const PROGRESS_KEY = 'SCRAPER_PROGRESS';
 
 // -----------------------------------------------------------------------------
@@ -64,40 +64,27 @@ function getErrorMessage(error: unknown): string {
     return String(error);
 }
 
-function normalizeText(
-    value: string | null | undefined,
-): string {
+function normalizeText(value: string | null | undefined): string {
     return (value ?? '')
         .replace(/\s+/g, ' ')
         .trim();
 }
 
-function extractImdbId(
-    href: string,
-): string | null {
-    const match =
-        href.match(/\/name\/(nm\d+)/i);
+function extractImdbId(href: string): string | null {
+    const match = href.match(/\/name\/(nm\d+)/i);
 
-    return match
-        ? match[1]
-        : null;
+    return match ? match[1] : null;
 }
 
-function extractEmail(
-    text: string,
-): string | null {
+function extractEmail(text: string): string | null {
     const match = text.match(
         /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
     );
 
-    return match
-        ? match[0].trim()
-        : null;
+    return match ? match[0].trim() : null;
 }
 
-function extractUrl(
-    text: string,
-): string | null {
+function extractUrl(text: string): string | null {
     const match = text.match(
         /https?:\/\/[^\s<>"']+/i,
     );
@@ -114,15 +101,11 @@ function extractUrl(
 function getPageNumberFromUrl(
     urlString: string,
 ): number {
-    const url =
-        new URL(urlString);
+    const url = new URL(urlString);
 
-    const pageNumber =
-        Number(
-            url.searchParams.get(
-                'pageNumber',
-            ) ?? '1',
-        );
+    const pageNumber = Number(
+        url.searchParams.get('pageNumber') ?? '1',
+    );
 
     if (
         !Number.isFinite(pageNumber)
@@ -138,8 +121,7 @@ function getUrlForPage(
     startUrl: string,
     pageNumber: number,
 ): string {
-    const url =
-        new URL(startUrl);
+    const url = new URL(startUrl);
 
     url.searchParams.set(
         'pageNumber',
@@ -162,24 +144,15 @@ async function findVisibleLocator(
     selectors: string[],
 ): Promise<Locator | null> {
     for (const selector of selectors) {
-        const locator =
-            page.locator(selector);
+        const locator = page.locator(selector);
 
         const count =
-            await locator.count()
-                .catch(() => 0);
+            await locator.count().catch(() => 0);
 
-        for (
-            let i = 0;
-            i < count;
-            i++
-        ) {
-            const candidate =
-                locator.nth(i);
+        for (let i = 0; i < count; i++) {
+            const candidate = locator.nth(i);
 
-            if (
-                await isVisible(candidate)
-            ) {
+            if (await isVisible(candidate)) {
                 return candidate;
             }
         }
@@ -224,59 +197,44 @@ async function safeClick(
 }
 
 // -----------------------------------------------------------------------------
-// Generic text/button inspection
+// Authentication
 // -----------------------------------------------------------------------------
 
-async function findClickableContainingText(
-    page: Page,
-    text: string,
-): Promise<Locator | null> {
-    const candidates =
-        page.getByText(
-            text,
-            {
-                exact: false,
-            },
+function parseAuthState(
+    value: string,
+): StorageState {
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(value);
+    } catch (error) {
+        throw new Error(
+            `authState is not valid JSON: ${getErrorMessage(error)}`,
         );
-
-    const count =
-        await candidates.count()
-            .catch(() => 0);
-
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
-        const candidate =
-            candidates.nth(i);
-
-        if (
-            !await isVisible(candidate)
-        ) {
-            continue;
-        }
-
-        const clickable =
-            candidate.locator(
-                'xpath=ancestor-or-self::button | ancestor-or-self::*[@role="button"] | ancestor-or-self::a',
-            ).first();
-
-        const clickableCount =
-            await clickable.count()
-                .catch(() => 0);
-
-        if (
-            clickableCount > 0
-            && await isVisible(clickable)
-        ) {
-            return clickable;
-        }
-
-        return candidate;
     }
 
-    return null;
+    if (
+        !parsed
+        || typeof parsed !== 'object'
+        || Array.isArray(parsed)
+    ) {
+        throw new Error(
+            'authState must be a Playwright storage-state JSON object.',
+        );
+    }
+
+    const authState =
+        parsed as StorageState;
+
+    if (
+        !Array.isArray(authState.cookies)
+    ) {
+        throw new Error(
+            'authState does not contain a valid cookies array.',
+        );
+    }
+
+    return authState;
 }
 
 // -----------------------------------------------------------------------------
@@ -291,11 +249,12 @@ async function getDirectContactButton(
         '[role="button"]:has-text("Direct Contact")',
         'a:has-text("Direct Contact")',
 
+        'button:has-text("Contact")',
+        '[role="button"]:has-text("Contact")',
+        'a:has-text("Contact")',
+
         '[aria-label*="Direct Contact" i]',
         '[title*="Direct Contact" i]',
-
-        '[data-testid*="direct-contact" i]',
-        '[data-test*="direct-contact" i]',
 
         'text=Direct Contact',
     ];
@@ -310,21 +269,51 @@ async function getDirectContactButton(
         return found;
     }
 
-    const broad =
-        await findClickableContainingText(
-            page,
+    const textMatches =
+        page.getByText(
             'Direct Contact',
+            {
+                exact: false,
+            },
         );
 
-    if (broad) {
-        return broad;
+    const count =
+        await textMatches
+            .count()
+            .catch(() => 0);
+
+    for (let i = 0; i < count; i++) {
+        const match =
+            textMatches.nth(i);
+
+        if (
+            !await isVisible(match)
+        ) {
+            continue;
+        }
+
+        const clickable =
+            match.locator(
+                'xpath=ancestor-or-self::button | ancestor-or-self::*[@role="button"] | ancestor-or-self::a',
+            ).first();
+
+        if (
+            await clickable
+                .count()
+                .catch(() => 0)
+            && await isVisible(clickable)
+        ) {
+            return clickable;
+        }
+
+        return match;
     }
 
     return null;
 }
 
 // -----------------------------------------------------------------------------
-// Copy button
+// Find Copy button
 // -----------------------------------------------------------------------------
 
 async function getCopyButton(
@@ -349,14 +338,11 @@ async function getCopyButton(
             root.locator(selector);
 
         const count =
-            await locator.count()
+            await locator
+                .count()
                 .catch(() => 0);
 
-        for (
-            let i = 0;
-            i < count;
-            i++
-        ) {
+        for (let i = 0; i < count; i++) {
             const candidate =
                 locator.nth(i);
 
@@ -377,36 +363,17 @@ async function getCopyButton(
         );
 
     const count =
-        await textMatches.count()
+        await textMatches
+            .count()
             .catch(() => 0);
 
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
+    for (let i = 0; i < count; i++) {
         const candidate =
             textMatches.nth(i);
 
         if (
             await isVisible(candidate)
         ) {
-            const clickable =
-                candidate.locator(
-                    'xpath=ancestor-or-self::button | ancestor-or-self::*[@role="button"]',
-                ).first();
-
-            const clickableCount =
-                await clickable.count()
-                    .catch(() => 0);
-
-            if (
-                clickableCount > 0
-                && await isVisible(clickable)
-            ) {
-                return clickable;
-            }
-
             return candidate;
         }
     }
@@ -415,7 +382,7 @@ async function getCopyButton(
 }
 
 // -----------------------------------------------------------------------------
-// Find contact container
+// Find opened contact container
 // -----------------------------------------------------------------------------
 
 async function findContactContainer(
@@ -429,6 +396,7 @@ async function findContactContainer(
         '[data-testid*="contact" i]',
 
         '[class*="direct-contact" i]',
+        '[class*="contact" i]',
     ];
 
     const direct =
@@ -447,20 +415,18 @@ async function findContactContainer(
         );
 
     if (copyButton) {
-        const container =
+        const parent =
             copyButton.locator(
-                'xpath=ancestor::*[@role="dialog" or @aria-modal="true" or self::section or self::article or self::div][1]',
+                'xpath=ancestor::*[self::div or self::section or self::article][1]',
             );
 
-        const count =
-            await container.count()
-                .catch(() => 0);
-
         if (
-            count > 0
-            && await isVisible(container)
+            await parent
+                .count()
+                .catch(() => 0)
+            && await isVisible(parent)
         ) {
-            return container;
+            return parent;
         }
     }
 
@@ -468,7 +434,7 @@ async function findContactContainer(
 }
 
 // -----------------------------------------------------------------------------
-// Clipboard
+// Clipboard reader
 // -----------------------------------------------------------------------------
 
 async function readClipboard(
@@ -476,15 +442,15 @@ async function readClipboard(
 ): Promise<string> {
     try {
         const text =
-            await page.evaluate(
-                async () => {
-                    try {
-                        return await navigator.clipboard.readText();
-                    } catch {
-                        return '';
-                    }
-                },
-            );
+            await page.evaluate(async () => {
+                try {
+                    return await navigator
+                        .clipboard
+                        .readText();
+                } catch {
+                    return '';
+                }
+            });
 
         return normalizeText(text);
     } catch {
@@ -493,7 +459,7 @@ async function readClipboard(
 }
 
 // -----------------------------------------------------------------------------
-// Links
+// Extract all links from a root
 // -----------------------------------------------------------------------------
 
 async function getLinksFromRoot(
@@ -503,16 +469,13 @@ async function getLinksFromRoot(
         root.locator('a[href]');
 
     const count =
-        await links.count()
+        await links
+            .count()
             .catch(() => 0);
 
     const hrefs: string[] = [];
 
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
+    for (let i = 0; i < count; i++) {
         const href =
             await links
                 .nth(i)
@@ -524,9 +487,7 @@ async function getLinksFromRoot(
         }
     }
 
-    return [
-        ...new Set(hrefs),
-    ];
+    return hrefs;
 }
 
 // -----------------------------------------------------------------------------
@@ -541,41 +502,39 @@ async function getDirectContact(
             'Searching for Direct Contact...',
         );
 
-        await page.waitForTimeout(
-            2_000,
-        );
-
         let directContactButton =
-            await getDirectContactButton(
-                page,
-            );
+            await getDirectContactButton(page);
 
         if (!directContactButton) {
             console.log(
-                'Direct Contact not immediately found. Waiting longer...',
+                'Direct Contact not immediately visible. Waiting...',
             );
 
             await page.waitForTimeout(
-                4_000,
+                3_000,
             );
 
             directContactButton =
-                await getDirectContactButton(
-                    page,
-                );
+                await getDirectContactButton(page);
         }
 
         if (!directContactButton) {
+            const body =
+                page.locator('body');
+
             const bodyText =
                 normalizeText(
-                    await page
-                        .locator('body')
+                    await body
                         .innerText()
                         .catch(() => ''),
                 );
 
             console.log(
-                `PAGE TEXT CONTAINS "DIRECT CONTACT": ${/direct contact/i.test(bodyText)}`,
+                `Page contains "Direct Contact": ${
+                    /direct contact/i.test(
+                        bodyText,
+                    )
+                }`,
             );
 
             return {
@@ -612,7 +571,7 @@ async function getDirectContact(
         );
 
         await page.waitForTimeout(
-            2_500,
+            2_000,
         );
 
         let contactContainer =
@@ -622,7 +581,7 @@ async function getDirectContact(
 
         if (!contactContainer) {
             await page.waitForTimeout(
-                2_500,
+                2_000,
             );
 
             contactContainer =
@@ -641,17 +600,13 @@ async function getDirectContact(
             );
 
         if (!copyButton) {
-            console.log(
-                'Copy button not immediately found. Waiting...',
-            );
-
             await page.waitForTimeout(
                 2_000,
             );
 
             copyButton =
                 await getCopyButton(
-                    page.locator('body'),
+                    searchRoot,
                 );
         }
 
@@ -671,7 +626,7 @@ async function getDirectContact(
 
         if (copyButton) {
             console.log(
-                'COPY BUTTON FOUND. CLICKING COPY...',
+                'Copy button found. Clicking...',
             );
 
             const copied =
@@ -681,22 +636,14 @@ async function getDirectContact(
 
             if (copied) {
                 await page.waitForTimeout(
-                    1_000,
+                    750,
                 );
 
                 clipboardText =
                     await readClipboard(
                         page,
                     );
-
-                console.log(
-                    `CLIPBOARD LENGTH: ${clipboardText.length}`,
-                );
             }
-        } else {
-            console.log(
-                'Copy button not found.',
-            );
         }
 
         const updatedContainer =
@@ -742,10 +689,6 @@ async function getDirectContact(
                 .filter(Boolean)
                 .join('\n');
 
-        console.log(
-            `COMBINED CONTACT DATA LENGTH: ${combinedText.length}`,
-        );
-
         const email =
             extractEmail(
                 combinedText,
@@ -769,19 +712,12 @@ async function getDirectContact(
             }
         }
 
-        // IMPORTANT:
-        // If IMDbPro gave us anything through the Copy button,
-        // that alone counts as Direct Contact found.
-
         if (
             clipboardText
+            || visibleText
             || email
             || contactUrl
         ) {
-            console.log(
-                'DIRECT CONTACT FOUND.',
-            );
-
             return {
                 email,
                 url: contactUrl,
@@ -843,9 +779,17 @@ async function closeDirectContactIfOpen(
         return;
     }
 
-    await safeClick(
-        closeButton,
-    ).catch(() => {});
+    try {
+        await safeClick(
+            closeButton,
+        );
+
+        await page.waitForTimeout(
+            300,
+        );
+    } catch {
+        // Not fatal.
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -856,21 +800,20 @@ async function processPerson(
     page: Page,
     person: Person,
 ): Promise<PersonRecord> {
-    console.log('\n----------------------------------------');
+    console.log(
+        '\n----------------------------------------',
+    );
+
     console.log(
         `PROCESSING: ${person.name}`,
     );
+
     console.log(
         `IMDb ID: ${person.imdbId}`,
     );
+
     console.log(
         `Profile: ${person.profileUrl}`,
-    );
-    console.log(
-        `Discovery page: ${person.discoveryPage}`,
-    );
-    console.log(
-        '----------------------------------------',
     );
 
     try {
@@ -885,7 +828,7 @@ async function processPerson(
         );
 
         await page.waitForTimeout(
-            3_000,
+            2_500,
         );
 
         console.log(
@@ -897,27 +840,31 @@ async function processPerson(
                 page,
             );
 
-        console.log(
-            `Contact status: ${contact.status}`,
-        );
-
         return {
             imdbId:
                 person.imdbId,
+
             name:
                 person.name,
+
             profileUrl:
                 person.profileUrl,
+
             discoveryPage:
                 person.discoveryPage,
+
             contactEmail:
                 contact.email,
+
             contactUrl:
                 contact.url,
+
             directContactRaw:
                 contact.raw,
+
             contactStatus:
                 contact.status,
+
             error:
                 contact.error,
         };
@@ -925,23 +872,35 @@ async function processPerson(
         const message =
             getErrorMessage(error);
 
+        console.error(
+            `ERROR PROCESSING ${person.name}: ${message}`,
+        );
+
         return {
             imdbId:
                 person.imdbId,
+
             name:
                 person.name,
+
             profileUrl:
                 person.profileUrl,
+
             discoveryPage:
                 person.discoveryPage,
+
             contactEmail:
                 null,
+
             contactUrl:
                 null,
+
             directContactRaw:
                 null,
+
             contactStatus:
                 'error',
+
             error:
                 message,
         };
@@ -971,253 +930,164 @@ async function saveProgress(
 
 await Actor.init();
 
-const input =
-    (await Actor.getInput()) as Input | null;
-
-if (
-    !input?.startUrl
-    || !input.startUrl.trim()
-) {
-    throw new Error(
-        'startUrl is required.',
-    );
-}
-
-const startUrl =
-    input.startUrl.trim();
-
-let parsedStartUrl: URL;
-
 try {
-    parsedStartUrl =
-        new URL(startUrl);
-} catch {
-    throw new Error(
-        'The provided startUrl is not a valid URL.',
-    );
-}
+    const input =
+        await Actor.getInput<Input>();
 
-const maxPages =
-    Math.max(
-        0,
-        input.maxPages ?? 0,
-    );
-
-const maxDirectors =
-    Math.max(
-        0,
-        input.maxDirectors ?? 0,
-    );
-
-const startPage =
-    getPageNumberFromUrl(
-        parsedStartUrl.toString(),
-    );
-
-console.log(
-    '\n==============================',
-);
-console.log(
-    'IMDbPro CONTACT SCRAPER',
-);
-console.log(
-    '==============================',
-);
-
-console.log(
-    `START PAGE: ${startPage}`,
-);
-
-if (
-    !fs.existsSync(
-        STORAGE_FILE,
-    )
-) {
-    throw new Error(
-        `Authentication file not found: ${STORAGE_FILE}`,
-    );
-}
-
-const browser: Browser =
-    await chromium.launch({
-        headless: true,
-    });
-
-const context: BrowserContext =
-    await browser.newContext({
-        storageState:
-            STORAGE_FILE,
-
-        viewport: {
-            width: 1920,
-            height: 1080,
-        },
-    });
-
-await context.grantPermissions(
-    [
-        'clipboard-read',
-        'clipboard-write',
-    ],
-    {
-        origin:
-            'https://pro.imdb.com',
-    },
-);
-
-const discoveryPage =
-    await context.newPage();
-
-const profilePage =
-    await context.newPage();
-
-const seenImdbIds =
-    new Set<string>();
-
-let totalPeopleFound = 0;
-let totalPeopleProcessed = 0;
-let totalPeopleWithContact = 0;
-
-let lastCompletedPage =
-    startPage - 1;
-
-let pageNumber =
-    startPage;
-
-let pagesProcessed = 0;
-
-while (true) {
     if (
-        maxPages > 0
-        && pagesProcessed >= maxPages
+        !input?.startUrl
+        || !input.startUrl.trim()
     ) {
-        break;
+        throw new Error(
+            'startUrl is required.',
+        );
     }
 
     if (
-        maxDirectors > 0
-        && totalPeopleProcessed >= maxDirectors
+        !input.authState
+        || !input.authState.trim()
     ) {
-        break;
+        throw new Error(
+            'authState is required. Paste your Playwright storage-state JSON into the Actor input.',
+        );
     }
 
-    const discoveryUrl =
-        pagesProcessed === 0
-            ? startUrl
-            : getUrlForPage(
-                startUrl,
-                pageNumber,
-            );
+    const startUrl =
+        input.startUrl.trim();
 
-    console.log(
-        `OPENING DISCOVERY PAGE ${pageNumber}`,
-    );
-
-    await discoveryPage.goto(
-        discoveryUrl,
-        {
-            waitUntil:
-                'domcontentloaded',
-            timeout:
-                120_000,
-        },
-    );
-
-    await discoveryPage.waitForTimeout(
-        5_000,
-    );
-
-    const nameLinks =
-        discoveryPage.locator(
-            'a[href*="/name/nm"]',
+    const authState =
+        parseAuthState(
+            input.authState.trim(),
         );
 
-    const count =
-        await nameLinks.count();
+    let parsedStartUrl: URL;
 
-    console.log(
-        `NAME LINKS FOUND: ${count}`,
-    );
-
-    if (count === 0) {
-        break;
+    try {
+        parsedStartUrl =
+            new URL(startUrl);
+    } catch {
+        throw new Error(
+            'The provided startUrl is not a valid URL.',
+        );
     }
 
-    const peopleOnPage: Person[] =
-        [];
+    const maxPages =
+        Math.max(
+            0,
+            input.maxPages ?? 0,
+        );
 
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
+    const maxDirectors =
+        Math.max(
+            0,
+            input.maxDirectors ?? 0,
+        );
+
+    const startPage =
+        getPageNumberFromUrl(
+            parsedStartUrl.toString(),
+        );
+
+    console.log(
+        '\n==============================',
+    );
+
+    console.log(
+        'IMDbPro CONTACT SCRAPER',
+    );
+
+    console.log(
+        '==============================',
+    );
+
+    console.log(
+        `Authentication cookies loaded: ${
+            authState.cookies.length
+        }`,
+    );
+
+    console.log(
+        `Authentication origins loaded: ${
+            authState.origins.length
+        }`,
+    );
+
+    console.log(
+        `Starting page: ${startPage}`,
+    );
+
+    console.log(
+        `Maximum pages: ${
+            maxPages === 0
+                ? 'UNLIMITED'
+                : maxPages
+        }`,
+    );
+
+    console.log(
+        `Maximum profiles: ${
+            maxDirectors === 0
+                ? 'UNLIMITED'
+                : maxDirectors
+        }`,
+    );
+
+    const browser: Browser =
+        await chromium.launch({
+            headless: true,
+        });
+
+    const context: BrowserContext =
+        await browser.newContext({
+            storageState:
+                authState,
+
+            viewport: {
+                width: 1920,
+                height: 1080,
+            },
+        });
+
+    await context.grantPermissions(
+        [
+            'clipboard-read',
+            'clipboard-write',
+        ],
+        {
+            origin:
+                'https://pro.imdb.com',
+        },
+    );
+
+    const discoveryPage =
+        await context.newPage();
+
+    const profilePage =
+        await context.newPage();
+
+    const seenImdbIds =
+        new Set<string>();
+
+    let totalPeopleFound = 0;
+    let totalPeopleProcessed = 0;
+    let totalPeopleWithContact = 0;
+
+    let lastCompletedPage =
+        startPage - 1;
+
+    let pageNumber =
+        startPage;
+
+    let pagesProcessed = 0;
+
+    while (true) {
         if (
-            maxDirectors > 0
-            && (
-                totalPeopleProcessed
-                + peopleOnPage.length
-            ) >= maxDirectors
+            maxPages > 0
+            && pagesProcessed >= maxPages
         ) {
             break;
         }
 
-        const link =
-            nameLinks.nth(i);
-
-        const name =
-            normalizeText(
-                await link
-                    .innerText()
-                    .catch(() => ''),
-            );
-
-        const href =
-            await link
-                .getAttribute('href')
-                .catch(() => null);
-
-        if (!href) {
-            continue;
-        }
-
-        const imdbId =
-            extractImdbId(href);
-
-        if (!imdbId) {
-            continue;
-        }
-
-        if (
-            seenImdbIds.has(
-                imdbId,
-            )
-        ) {
-            continue;
-        }
-
-        seenImdbIds.add(
-            imdbId,
-        );
-
-        totalPeopleFound++;
-
-        peopleOnPage.push({
-            imdbId,
-            name,
-            profileUrl:
-                new URL(
-                    href,
-                    discoveryPage.url(),
-                ).toString(),
-            discoveryPage:
-                pageNumber,
-        });
-    }
-
-    for (
-        const person
-        of peopleOnPage
-    ) {
         if (
             maxDirectors > 0
             && totalPeopleProcessed >= maxDirectors
@@ -1225,92 +1095,246 @@ while (true) {
             break;
         }
 
-        const result =
-            await processPerson(
-                profilePage,
-                person,
+        const discoveryUrl =
+            pagesProcessed === 0
+                ? startUrl
+                : getUrlForPage(
+                    startUrl,
+                    pageNumber,
+                );
+
+        console.log(
+            `\nOPENING DISCOVERY PAGE ${pageNumber}`,
+        );
+
+        await discoveryPage.goto(
+            discoveryUrl,
+            {
+                waitUntil:
+                    'domcontentloaded',
+                timeout:
+                    120_000,
+            },
+        );
+
+        await discoveryPage.waitForTimeout(
+            5_000,
+        );
+
+        const nameLinks =
+            discoveryPage.locator(
+                'a[href*="/name/nm"]',
             );
 
-        totalPeopleProcessed++;
+        const count =
+            await nameLinks.count();
 
-        if (
-            result.contactStatus === 'found'
-            && result.directContactRaw
+        console.log(
+            `NAME LINKS FOUND: ${count}`,
+        );
+
+        if (count === 0) {
+            console.log(
+                'No people found. Stopping.',
+            );
+
+            break;
+        }
+
+        const peopleOnPage:
+            Person[] = [];
+
+        for (
+            let i = 0;
+            i < count;
+            i++
         ) {
-            totalPeopleWithContact++;
+            if (
+                maxDirectors > 0
+                && (
+                    totalPeopleProcessed
+                    + peopleOnPage.length
+                ) >= maxDirectors
+            ) {
+                break;
+            }
 
-            await Actor.pushData({
-                name:
-                    result.name,
-                imdbId:
-                    result.imdbId,
-                profileUrl:
-                    result.profileUrl,
+            const link =
+                nameLinks.nth(i);
+
+            const href =
+                await link
+                    .getAttribute('href')
+                    .catch(() => null);
+
+            if (!href) {
+                continue;
+            }
+
+            const imdbId =
+                extractImdbId(href);
+
+            if (!imdbId) {
+                continue;
+            }
+
+            if (
+                seenImdbIds.has(
+                    imdbId,
+                )
+            ) {
+                continue;
+            }
+
+            seenImdbIds.add(
+                imdbId,
+            );
+
+            const rawName =
+                normalizeText(
+                    await link
+                        .innerText()
+                        .catch(() => ''),
+                );
+
+            const name =
+                rawName
+                    .replace(
+                        /\s+(Actor|Actress|Director|Writer|Producer|Cinematographer|Editor|Composer)\b.*$/i,
+                        '',
+                    )
+                    .trim()
+                || rawName;
+
+            const profileUrl =
+                new URL(
+                    href,
+                    'https://pro.imdb.com',
+                ).toString();
+
+            peopleOnPage.push({
+                imdbId,
+                name,
+                profileUrl,
                 discoveryPage:
-                    result.discoveryPage,
-
-                // This is the most important field.
-                // It preserves the exact copied Direct Contact content.
-
-                directContact:
-                    result.directContactRaw,
-
-                contactEmail:
-                    result.contactEmail,
-
-                contactUrl:
-                    result.contactUrl,
+                    pageNumber,
             });
+
+            totalPeopleFound++;
         }
 
         console.log(
-            `Processed: ${totalPeopleProcessed}`,
+            `UNIQUE PEOPLE TO PROCESS: ${peopleOnPage.length}`,
         );
 
-        console.log(
-            `Contacts found: ${totalPeopleWithContact}`,
-        );
+        for (
+            const person
+            of peopleOnPage
+        ) {
+            if (
+                maxDirectors > 0
+                && totalPeopleProcessed >= maxDirectors
+            ) {
+                break;
+            }
+
+            const result =
+                await processPerson(
+                    profilePage,
+                    person,
+                );
+
+            totalPeopleProcessed++;
+
+            if (
+                result.contactStatus === 'found'
+                && (
+                    result.contactEmail
+                    || result.contactUrl
+                    || result.directContactRaw
+                )
+            ) {
+                totalPeopleWithContact++;
+
+                await Actor.pushData({
+                    name:
+                        result.name,
+
+                    imdbId:
+                        result.imdbId,
+
+                    profileUrl:
+                        result.profileUrl,
+
+                    discoveryPage:
+                        result.discoveryPage,
+
+                    directContact:
+                        result.directContactRaw,
+
+                    contactEmail:
+                        result.contactEmail,
+
+                    contactUrl:
+                        result.contactUrl,
+                });
+            }
+
+            console.log(
+                `Processed: ${totalPeopleProcessed}`,
+            );
+
+            console.log(
+                `Contacts found: ${totalPeopleWithContact}`,
+            );
+        }
+
+        lastCompletedPage =
+            pageNumber;
+
+        pagesProcessed++;
+
+        await saveProgress({
+            lastCompletedPage,
+            totalPeopleDiscovered:
+                totalPeopleFound,
+            totalPeopleProcessed,
+            totalPeopleWithContact,
+            updatedAt:
+                new Date().toISOString(),
+        });
+
+        pageNumber++;
     }
 
-    lastCompletedPage =
-        pageNumber;
+    console.log(
+        '\n==============================',
+    );
 
-    pagesProcessed++;
+    console.log(
+        'SCRAPING FINISHED',
+    );
 
-    await saveProgress({
-        lastCompletedPage,
-        totalPeopleDiscovered:
-            totalPeopleFound,
-        totalPeopleProcessed,
-        totalPeopleWithContact,
-        updatedAt:
-            new Date().toISOString(),
-    });
+    console.log(
+        '==============================',
+    );
 
-    pageNumber++;
+    console.log(
+        `People processed: ${totalPeopleProcessed}`,
+    );
+
+    console.log(
+        `Contacts found: ${totalPeopleWithContact}`,
+    );
+
+    console.log(
+        `Last page completed: ${lastCompletedPage}`,
+    );
+
+    await profilePage.close();
+    await discoveryPage.close();
+    await browser.close();
+
+} finally {
+    await Actor.exit();
 }
-
-console.log(
-    '\n==============================',
-);
-console.log(
-    'SCRAPING FINISHED',
-);
-console.log(
-    '==============================',
-);
-
-console.log(
-    `People processed: ${totalPeopleProcessed}`,
-);
-
-console.log(
-    `Contacts found: ${totalPeopleWithContact}`,
-);
-
-await profilePage.close();
-await discoveryPage.close();
-
-await browser.close();
-
-await Actor.exit();
