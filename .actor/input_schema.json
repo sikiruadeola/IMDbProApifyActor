@@ -1,44 +1,43 @@
 {
-    "$schema": "https://apify.com/schemas/v1/input.ide.json",
-    "title": "IMDbPro Director Contact Scraper",
-    "description": "Extract direct contact information from authorized IMDbPro discovery results. Paste any authorized IMDbPro Discover People URL to choose the profession, Star Meter range, credit filters, sorting, and other discovery filters.",
-    "type": "object",
-    "schemaVersion": 1,
-    "properties": {
-        "startUrl": {
-            "title": "IMDbPro Start URL",
-            "type": "string",
-            "description": "Paste the complete IMDbPro Discover People URL you want to scrape. You can change this before any run. The Actor will preserve the filters in this URL, such as profession, Star Meter range, credit year, sorting, and other discovery settings.",
-            "editor": "textarea",
-            "minLength": 1,
-            "prefill": "https://pro.imdb.com/discover/people?creditCategoryId=amzn1.imdb.concept.name_credit_category.ace5cb4c-8708-4238-9542-04641e7c8171&hasEmploymentTrait=false&hasRepresentationTrait=false&hasCreditTrait=true&hasPerformanceTrait=false&hasActingTrait=false&hasMusicTrait=false&hasCreditCategoryRoles=true&profession=amzn1.imdb.concept.profession_category.c718155c-36c1-42ef-84ce-5dcb731e09b3&sortOrder=RELEVANCE&pageNumber=1&minNumOfReleasedCredits=1&creditBeginYear=2021&starMeterRangeMin=550000"
-        },
-        "startPage": {
-            "title": "Start discovery page",
-            "type": "integer",
-            "description": "Discovery page number where this run should begin. The Actor updates only the pageNumber parameter while preserving the other filters from the Start URL.",
-            "default": 1,
-            "minimum": 1,
-            "editor": "number"
-        },
-        "maxPages": {
-            "title": "Maximum discovery pages",
-            "type": "integer",
-            "description": "Maximum number of discovery pages to process. Set to 0 to continue until the Actor run stops.",
-            "default": 0,
-            "minimum": 0,
-            "editor": "number"
-        },
-        "maxDirectors": {
-            "title": "Maximum profiles",
-            "type": "integer",
-            "description": "Maximum number of profiles to process in this run. Set to 0 for no artificial limit.",
-            "default": 0,
-            "minimum": 0,
-            "editor": "number"
-        }
+  "title": "IMDbPro Contact Scraper",
+  "description": "Scrape people from an IMDbPro discovery URL and extract available Direct Contact information using the IMDbPro authentication state supplied for this run.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "IMDbPro Discovery URL",
+      "type": "string",
+      "description": "Paste the exact IMDbPro discovery/search URL you want to scrape.",
+      "editor": "textfield",
+      "prefill": ""
     },
-    "required": [
-        "startUrl"
-    ]
+    "authState": {
+      "title": "IMDbPro Authentication State",
+      "type": "string",
+      "description": "Paste the complete Playwright storage-state JSON for the IMDbPro account/session you want to use. This should normally contain cookies and origins.",
+      "editor": "textarea",
+      "isSecret": true,
+      "prefill": ""
+    },
+    "maxPages": {
+      "title": "Maximum Discovery Pages",
+      "type": "integer",
+      "description": "Maximum number of discovery pages to process. Use 0 for unlimited.",
+      "editor": "number",
+      "default": 0,
+      "minimum": 0
+    },
+    "maxDirectors": {
+      "title": "Maximum Profiles",
+      "type": "integer",
+      "description": "Maximum number of people/profiles to process. Use 0 for unlimited.",
+      "editor": "number",
+      "default": 0,
+      "minimum": 0
+    }
+  },
+  "required": [
+    "startUrl",
+    "authState"
+  ]
 }
