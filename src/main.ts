@@ -1,4 +1,3 @@
-```ts
 import { Actor } from 'apify';
 import {
     chromium,
@@ -7,10 +6,6 @@ import {
     type Locator,
     type Page,
 } from 'playwright';
-
-// ============================================================================
-// TYPES
-// ============================================================================
 
 interface Input {
     startUrl: string;
@@ -27,88 +22,52 @@ interface Person {
 
 interface DirectContactResult {
     imdbId: string;
-    profileUrl: string;
     name: string;
+    profileUrl: string;
     email: string;
 }
 
-// ============================================================================
-// CONSTANTS
-// ============================================================================
-
-const PROFILE_WAIT_MS = 3000;
 const DISCOVERY_WAIT_MS = 5000;
-const DIRECT_CONTACT_WAIT_MS = 2500;
-
-// ============================================================================
-// GENERAL HELPERS
-// ============================================================================
+const PROFILE_WAIT_MS = 3000;
+const CONTACT_WAIT_MS = 2000;
 
 function errorMessage(error: unknown): string {
-    return error instanceof Error
-        ? error.message
-        : String(error);
+    return error instanceof Error ? error.message : String(error);
 }
 
-function normalizeText(
-    value: string | null | undefined,
-): string {
-    return (value ?? '')
-        .replace(/\s+/g, ' ')
-        .trim();
+function normalizeText(value: string | null | undefined): string {
+    return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function extractImdbId(
-    url: string,
-): string | null {
-    const match = url.match(
-        /\/name\/(nm\d+)/i,
-    );
-
+function extractImdbId(url: string): string | null {
+    const match = url.match(/\/name\/(nm\d+)/i);
     return match ? match[1] : null;
 }
 
-function extractEmail(
-    value: string,
-): string | null {
+function extractEmail(value: string): string | null {
     const match = value.match(
         /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
     );
 
-    return match
-        ? match[0].trim()
-        : null;
+    return match ? match[0].trim() : null;
 }
 
-// ============================================================================
-// AUTH STATE
-// ============================================================================
-
-function parseAuthState(
-    value: unknown,
-): any {
-    if (
-        value === null ||
-        value === undefined
-    ) {
-        throw new Error(
-            'authState is required.',
-        );
+function parseAuthState(value: unknown): any {
+    if (value === null || value === undefined) {
+        throw new Error('authState is required.');
     }
 
     let parsed: unknown = value;
 
     if (typeof value === 'string') {
-        const trimmed = value.trim();
+        const text = value.trim();
 
-        if (!trimmed) {
-            throw new Error(
-                'authState is empty.',
-            );
+        if (!text) {
+            throw new Error('authState is empty.');
         }
 
         try {
-            parsed = JSON.parse(trimmed);
+            parsed = JSON.parse(text);
         } catch (error) {
             throw new Error(
                 `Could not parse authState JSON: ${errorMessage(error)}`,
@@ -126,31 +85,20 @@ function parseAuthState(
         );
     }
 
-    const state =
-        parsed as Record<string, unknown>;
+    const state = parsed as Record<string, unknown>;
 
     if (!Array.isArray(state.cookies)) {
-        throw new Error(
-            'authState.cookies must be an array.',
-        );
+        throw new Error('authState.cookies must be an array.');
     }
 
     if (!Array.isArray(state.origins)) {
-        throw new Error(
-            'authState.origins must be an array.',
-        );
+        throw new Error('authState.origins must be an array.');
     }
 
     return state;
 }
 
-// ============================================================================
-// LOCATOR HELPERS
-// ============================================================================
-
-async function isVisible(
-    locator: Locator,
-): Promise<boolean> {
+async function isVisible(locator: Locator): Promise<boolean> {
     try {
         return await locator.isVisible();
     } catch {
@@ -158,48 +106,29 @@ async function isVisible(
     }
 }
 
-async function getVisibleLocators(
+async function visibleLocators(
     root: Locator,
     selector: string,
 ): Promise<Locator[]> {
     const locator = root.locator(selector);
+    const count = await locator.count().catch(() => 0);
+    const result: Locator[] = [];
 
-    const count = await locator
-        .count()
-        .catch(() => 0);
+    for (let i = 0; i < count; i++) {
+        const candidate = locator.nth(i);
 
-    const results: Locator[] = [];
-
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
-        const candidate =
-            locator.nth(i);
-
-        if (
-            await isVisible(candidate)
-        ) {
-            results.push(candidate);
+        if (await isVisible(candidate)) {
+            result.push(candidate);
         }
     }
 
-    return results;
+    return result;
 }
 
-async function safeClick(
-    locator: Locator,
-): Promise<boolean> {
+async function safeClick(locator: Locator): Promise<boolean> {
     try {
-        await locator
-            .scrollIntoViewIfNeeded()
-            .catch(() => {});
-
-        await locator.click({
-            timeout: 10000,
-        });
-
+        await locator.scrollIntoViewIfNeeded().catch(() => {});
+        await locator.click({ timeout: 10000 });
         return true;
     } catch {
         try {
@@ -207,7 +136,6 @@ async function safeClick(
                 timeout: 10000,
                 force: true,
             });
-
             return true;
         } catch {
             return false;
@@ -215,64 +143,6 @@ async function safeClick(
     }
 }
 
-// ============================================================================
-// PROFILE NAME
-// ============================================================================
-
-async function getProfileName(
-    page: Page,
-): Promise<string> {
-    const selectors = [
-        'h1',
-        '[data-testid*="name-header" i] h1',
-        '[data-testid*="name" i] h1',
-    ];
-
-    for (
-        const selector of selectors
-    ) {
-        const locator =
-            page.locator(selector);
-
-        const count = await locator
-            .count()
-            .catch(() => 0);
-
-        for (
-            let i = 0;
-            i < count;
-            i++
-        ) {
-            const text =
-                normalizeText(
-                    await locator
-                        .nth(i)
-                        .innerText()
-                        .catch(() => ''),
-                );
-
-            if (
-                text.length > 0 &&
-                text.length < 200
-            ) {
-                return text;
-            }
-        }
-    }
-
-    return '';
-}
-
-// ============================================================================
-// CONTACT CONTROL
-// ============================================================================
-
-/**
- * Find the control that opens the contact information.
- *
- * This is ONLY the control used to reveal contact information.
- * We do not extract any email from this control.
- */
 async function findContactControl(
     page: Page,
 ): Promise<Locator | null> {
@@ -284,51 +154,30 @@ async function findContactControl(
         '[title*="Contact" i]',
     ];
 
-    for (
-        const selector of selectors
-    ) {
-        const candidates =
-            await getVisibleLocators(
-                page.locator('body'),
-                selector,
+    for (const selector of selectors) {
+        const candidates = await visibleLocators(
+            page.locator('body'),
+            selector,
+        );
+
+        for (const candidate of candidates) {
+            const text = normalizeText(
+                await candidate.innerText().catch(() => ''),
             );
 
-        for (
-            const candidate of candidates
-        ) {
-            const text =
-                normalizeText(
-                    await candidate
-                        .innerText()
-                        .catch(() => ''),
-                );
+            const aria = normalizeText(
+                await candidate
+                    .getAttribute('aria-label')
+                    .catch(() => null),
+            );
 
-            const aria =
-                normalizeText(
-                    await candidate
-                        .getAttribute(
-                            'aria-label',
-                        )
-                        .catch(() => null),
-                );
+            const title = normalizeText(
+                await candidate
+                    .getAttribute('title')
+                    .catch(() => null),
+            );
 
-            const title =
-                normalizeText(
-                    await candidate
-                        .getAttribute(
-                            'title',
-                        )
-                        .catch(() => null),
-                );
-
-            const combined =
-                `${text} ${aria} ${title}`;
-
-            if (
-                /contact/i.test(
-                    combined,
-                )
-            ) {
+            if (/contact/i.test(`${text} ${aria} ${title}`)) {
                 return candidate;
             }
         }
@@ -337,41 +186,19 @@ async function findContactControl(
     return null;
 }
 
-// ============================================================================
-// DIRECT CONTACT SECTION
-// ============================================================================
-
-/**
- * Find the exact "Direct Contact" heading.
- *
- * We intentionally require the exact visible text.
- */
-async function findDirectContactHeading(
+async function findExactDirectContactHeading(
     page: Page,
 ): Promise<Locator | null> {
-    const candidates =
-        page.getByText(
-            'Direct Contact',
-            {
-                exact: true,
-            },
-        );
+    const headings = page.getByText('Direct Contact', {
+        exact: true,
+    });
 
-    const count = await candidates
-        .count()
-        .catch(() => 0);
+    const count = await headings.count().catch(() => 0);
 
-    for (
-        let i = 0;
-        i < count;
-        i++
-    ) {
-        const candidate =
-            candidates.nth(i);
+    for (let i = 0; i < count; i++) {
+        const candidate = headings.nth(i);
 
-        if (
-            await isVisible(candidate)
-        ) {
+        if (await isVisible(candidate)) {
             return candidate;
         }
     }
@@ -379,61 +206,32 @@ async function findDirectContactHeading(
     return null;
 }
 
-/**
- * Find the smallest useful DOM container around
- * the Direct Contact heading.
- *
- * We do NOT search the entire page for a copy button.
- */
 async function findDirectContactContainer(
-    page: Page,
     heading: Locator,
 ): Promise<Locator | null> {
     let current = heading;
 
-    for (
-        let level = 0;
-        level < 10;
-        level++
-    ) {
-        const text =
-            normalizeText(
-                await current
-                    .innerText()
-                    .catch(() => ''),
-            );
+    for (let level = 0; level < 10; level++) {
+        const text = normalizeText(
+            await current.innerText().catch(() => ''),
+        );
 
-        const buttons =
-            current.locator(
-                'button, [role="button"]',
-            );
+        const buttons = current.locator(
+            'button, [role="button"]',
+        );
 
-        const buttonCount =
-            await buttons
-                .count()
-                .catch(() => 0);
+        const buttonCount = await buttons.count().catch(() => 0);
 
-        /*
-         * A useful Direct Contact container normally
-         * contains the heading plus its action control.
-         */
         if (
-            buttonCount > 0 &&
-            /Direct Contact/i.test(text)
+            /Direct Contact/i.test(text) &&
+            buttonCount > 0
         ) {
             return current;
         }
 
-        const parent =
-            current.locator(
-                'xpath=..',
-            );
+        const parent = current.locator('xpath=..');
 
-        if (
-            await parent
-                .count()
-                .catch(() => 0) === 0
-        ) {
+        if ((await parent.count().catch(() => 0)) === 0) {
             break;
         }
 
@@ -443,26 +241,7 @@ async function findDirectContactContainer(
     return null;
 }
 
-// ============================================================================
-// COPY BUTTON
-// ============================================================================
-
-/**
- * Find ONLY the copy control associated with Direct Contact.
- *
- * We support the common accessible implementations:
- *
- * - aria-label="Copy"
- * - title="Copy"
- * - data-testid containing "copy"
- * - button containing "Copy"
- *
- * We intentionally DO NOT select an arbitrary button if
- * multiple buttons are present. That prevents us from
- * accidentally clicking an agent/manager/representative
- * control.
- */
-async function findDirectContactCopyButton(
+async function findCopyButton(
     container: Locator,
 ): Promise<Locator | null> {
     const selectors = [
@@ -476,73 +255,40 @@ async function findDirectContactCopyButton(
         '[role="button"]:has-text("Copy")',
     ];
 
-    for (
-        const selector of selectors
-    ) {
-        const candidates =
-            await getVisibleLocators(
-                container,
-                selector,
-            );
+    for (const selector of selectors) {
+        const candidates = await visibleLocators(
+            container,
+            selector,
+        );
 
-        if (
-            candidates.length > 0
-        ) {
+        if (candidates.length > 0) {
             return candidates[0];
         }
     }
 
-    /*
-     * IMDbPro's UI may render the copy control
-     * as an icon-only button without an accessible
-     * "copy" label.
-     *
-     * Inspect buttons in the Direct Contact
-     * container, but only accept one if there
-     * is exactly one button.
-     *
-     * This is deliberately conservative.
-     */
-    const buttons =
-        container.locator(
-            'button, [role="button"]',
-        );
-
-    const buttonCount =
-        await buttons
-            .count()
-            .catch(() => 0);
-
-    console.log(
-        `DIRECT CONTACT BUTTONS IN CONTAINER: ${buttonCount}`,
+    const buttons = container.locator(
+        'button, [role="button"]',
     );
 
-    if (
-        buttonCount === 1
-    ) {
-        const button =
-            buttons.first();
+    const count = await buttons.count().catch(() => 0);
 
-        if (
-            await isVisible(button)
-        ) {
+    console.log(
+        `DIRECT CONTACT BUTTON COUNT: ${count}`,
+    );
+
+    if (count === 1) {
+        const button = buttons.first();
+
+        if (await isVisible(button)) {
             console.log(
-                'DIRECT CONTACT: exactly one action button found; treating it as copy control.',
+                'DIRECT CONTACT: one unidentified button found; treating it as the copy control.',
             );
 
             return button;
         }
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * If there are multiple unidentified buttons,
-     * do not guess.
-     */
-    if (
-        buttonCount > 1
-    ) {
+    if (count > 1) {
         console.log(
             'DIRECT CONTACT: multiple unidentified buttons found; refusing to guess.',
         );
@@ -551,36 +297,25 @@ async function findDirectContactCopyButton(
     return null;
 }
 
-// ============================================================================
-// CLIPBOARD
-// ============================================================================
-
 async function readClipboard(
     page: Page,
 ): Promise<string> {
     try {
-        const value =
-            await page.evaluate(
-                async () => {
-                    try {
-                        return await navigator.clipboard.readText();
-                    } catch {
-                        return '';
-                    }
-                },
-            );
+        const text = await page.evaluate(async () => {
+            try {
+                return await navigator.clipboard.readText();
+            } catch {
+                return '';
+            }
+        });
 
-        return normalizeText(value);
+        return normalizeText(text);
     } catch {
         return '';
     }
 }
 
-// ============================================================================
-// DIRECT CONTACT EMAIL EXTRACTION
-// ============================================================================
-
-async function extractDirectContactEmail(
+async function getDirectContactEmail(
     page: Page,
 ): Promise<string | null> {
     console.log(
@@ -588,9 +323,7 @@ async function extractDirectContactEmail(
     );
 
     const heading =
-        await findDirectContactHeading(
-            page,
-        );
+        await findExactDirectContactHeading(page);
 
     if (!heading) {
         console.log(
@@ -605,10 +338,7 @@ async function extractDirectContactEmail(
     );
 
     const container =
-        await findDirectContactContainer(
-            page,
-            heading,
-        );
+        await findDirectContactContainer(heading);
 
     if (!container) {
         console.log(
@@ -623,9 +353,7 @@ async function extractDirectContactEmail(
     );
 
     const copyButton =
-        await findDirectContactCopyButton(
-            container,
-        );
+        await findCopyButton(container);
 
     if (!copyButton) {
         console.log(
@@ -639,62 +367,35 @@ async function extractDirectContactEmail(
         'DIRECT CONTACT: COPY BUTTON FOUND.',
     );
 
-    /*
-     * Clear the clipboard first.
-     *
-     * This is important because otherwise a failed
-     * copy could leave an old email in the clipboard.
-     */
     try {
-        await page.evaluate(
-            async () => {
-                try {
-                    await navigator.clipboard.writeText(
-                        '',
-                    );
-                } catch {
-                    // Ignore clipboard clearing failure.
-                }
-            },
-        );
+        await page.evaluate(async () => {
+            try {
+                await navigator.clipboard.writeText('');
+            } catch {
+                // Ignore clipboard clearing failure.
+            }
+        });
     } catch {
         // Ignore.
     }
 
-    try {
-        await copyButton.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
 
-        await page.waitForTimeout(
-            300,
-        );
+    console.log(
+        'DIRECT CONTACT: CLICKING COPY BUTTON...',
+    );
 
+    const clicked = await safeClick(copyButton);
+
+    if (!clicked) {
         console.log(
-            'DIRECT CONTACT: CLICKING COPY BUTTON...',
-        );
-
-        const clicked =
-            await safeClick(
-                copyButton,
-            );
-
-        if (!clicked) {
-            console.log(
-                'DIRECT CONTACT: COPY BUTTON CLICK FAILED.',
-            );
-
-            return null;
-        }
-    } catch (error) {
-        console.log(
-            `DIRECT CONTACT: COPY ERROR: ${errorMessage(error)}`,
+            'DIRECT CONTACT: COPY BUTTON CLICK FAILED.',
         );
 
         return null;
     }
 
-    await page.waitForTimeout(
-        DIRECT_CONTACT_WAIT_MS,
-    );
+    await page.waitForTimeout(CONTACT_WAIT_MS);
 
     const clipboardText =
         await readClipboard(page);
@@ -712,9 +413,7 @@ async function extractDirectContactEmail(
     );
 
     const email =
-        extractEmail(
-            clipboardText,
-        );
+        extractEmail(clipboardText);
 
     if (!email) {
         console.log(
@@ -731,42 +430,28 @@ async function extractDirectContactEmail(
     return email;
 }
 
-// ============================================================================
-// DISCOVERY
-// ============================================================================
-
 async function findProfileLinks(
     page: Page,
 ): Promise<string[]> {
-    const hrefs =
-        await page
-            .locator(
-                'a[href*="/name/nm"]',
-            )
-            .evaluateAll(
-                (anchors) =>
-                    anchors
-                        .map(
-                            (anchor) =>
-                                (
-                                    anchor as HTMLAnchorElement
-                                ).href,
-                        )
-                        .filter(Boolean),
-            )
-            .catch(() => []);
+    const hrefs = await page
+        .locator('a[href*="/name/nm"]')
+        .evaluateAll((anchors) =>
+            anchors
+                .map((anchor) =>
+                    (anchor as HTMLAnchorElement).href,
+                )
+                .filter(Boolean),
+        )
+        .catch(() => []);
 
-    return [
-        ...new Set(hrefs),
-    ];
+    return [...new Set(hrefs)];
 }
 
-function buildPageUrl(
+function buildDiscoveryUrl(
     startUrl: string,
     pageNumber: number,
 ): string {
-    const url =
-        new URL(startUrl);
+    const url = new URL(startUrl);
 
     url.searchParams.set(
         'pageNumber',
@@ -776,16 +461,40 @@ function buildPageUrl(
     return url.toString();
 }
 
-// ============================================================================
-// PROCESS PROFILE
-// ============================================================================
+async function getProfileName(
+    page: Page,
+): Promise<string> {
+    const selectors = [
+        'h1',
+        '[data-testid*="name-header" i] h1',
+    ];
+
+    for (const selector of selectors) {
+        const locator = page.locator(selector);
+        const count = await locator.count().catch(() => 0);
+
+        for (let i = 0; i < count; i++) {
+            const text = normalizeText(
+                await locator
+                    .nth(i)
+                    .innerText()
+                    .catch(() => ''),
+            );
+
+            if (text && text.length < 200) {
+                return text;
+            }
+        }
+    }
+
+    return '';
+}
 
 async function processProfile(
     context: BrowserContext,
     person: Person,
 ): Promise<DirectContactResult | null> {
-    const page =
-        await context.newPage();
+    const page = await context.newPage();
 
     try {
         console.log('');
@@ -793,27 +502,20 @@ async function processProfile(
             '========================================',
         );
         console.log(
-            `PROCESSING: ${person.imdbId}`,
+            `PROCESSING PROFILE: ${person.imdbId}`,
         );
         console.log(
-            `NAME: ${person.name}`,
-        );
-        console.log(
-            `PROFILE: ${person.profileUrl}`,
+            `PROFILE URL: ${person.profileUrl}`,
         );
         console.log(
             '========================================',
         );
 
         try {
-            await page.goto(
-                person.profileUrl,
-                {
-                    waitUntil:
-                        'domcontentloaded',
-                    timeout: 60000,
-                },
-            );
+            await page.goto(person.profileUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000,
+            });
         } catch (error) {
             console.log(
                 `PROFILE NAVIGATION FAILED: ${errorMessage(error)}`,
@@ -830,12 +532,9 @@ async function processProfile(
             `PROFILE ACTUAL URL: ${page.url()}`,
         );
 
-        const currentUrl =
-            page.url();
-
         if (
             /signin|login|ap\/signin/i.test(
-                currentUrl,
+                page.url(),
             )
         ) {
             console.log(
@@ -845,53 +544,35 @@ async function processProfile(
             return null;
         }
 
-        /*
-         * First try to find Direct Contact directly.
-         *
-         * We do not want to click arbitrary
-         * representative/agent/manager controls.
-         */
-        let directHeading =
-            await findDirectContactHeading(
+        let heading =
+            await findExactDirectContactHeading(
                 page,
             );
 
-        /*
-         * If Direct Contact is not currently visible,
-         * look for the general contact control that
-         * reveals the contact panel.
-         */
-        if (!directHeading) {
+        if (!heading) {
             console.log(
-                'DIRECT CONTACT SECTION NOT YET VISIBLE.',
+                'DIRECT CONTACT NOT VISIBLE YET.',
             );
 
             console.log(
-                'SEARCHING FOR CONTACT CONTROL...',
+                'LOOKING FOR CONTACT CONTROL...',
             );
 
             const contactControl =
-                await findContactControl(
-                    page,
-                );
+                await findContactControl(page);
 
-            if (
-                contactControl
-            ) {
+            if (contactControl) {
                 console.log(
                     'CONTACT CONTROL FOUND. CLICKING...',
                 );
 
-                const clicked =
+                if (
                     await safeClick(
                         contactControl,
-                    );
-
-                if (
-                    clicked
+                    )
                 ) {
                     await page.waitForTimeout(
-                        DIRECT_CONTACT_WAIT_MS,
+                        CONTACT_WAIT_MS,
                     );
                 }
             } else {
@@ -900,38 +581,25 @@ async function processProfile(
                 );
             }
 
-            directHeading =
-                await findDirectContactHeading(
+            heading =
+                await findExactDirectContactHeading(
                     page,
                 );
         }
 
-        /*
-         * Give the page a little more time if
-         * the contact section is dynamically rendered.
-         */
-        if (!directHeading) {
-            await page.waitForTimeout(
-                1500,
-            );
+        if (!heading) {
+            await page.waitForTimeout(1500);
 
-            directHeading =
-                await findDirectContactHeading(
+            heading =
+                await findExactDirectContactHeading(
                     page,
                 );
         }
 
-        /*
-         * FINAL RULE:
-         *
-         * If there is no exact Direct Contact
-         * section, save NOTHING.
-         */
-        if (!directHeading) {
+        if (!heading) {
             console.log(
                 'NO DIRECT CONTACT SECTION.',
             );
-
             console.log(
                 'NOT SAVED.',
             );
@@ -940,21 +608,12 @@ async function processProfile(
         }
 
         const email =
-            await extractDirectContactEmail(
-                page,
-            );
+            await getDirectContactEmail(page);
 
-        /*
-         * FINAL RULE:
-         *
-         * Only a successful email copied from
-         * Direct Contact is accepted.
-         */
         if (!email) {
             console.log(
                 'NO DIRECT CONTACT EMAIL WAS COPIED.',
             );
-
             console.log(
                 'NOT SAVED.',
             );
@@ -962,15 +621,13 @@ async function processProfile(
             return null;
         }
 
-        console.log(
-            `DIRECT CONTACT CONFIRMED: ${email}`,
-        );
+        const name =
+            await getProfileName(page);
 
         return {
             imdbId: person.imdbId,
-            profileUrl:
-                person.profileUrl,
-            name: person.name,
+            name,
+            profileUrl: person.profileUrl,
             email,
         };
     } catch (error) {
@@ -980,15 +637,9 @@ async function processProfile(
 
         return null;
     } finally {
-        await page
-            .close()
-            .catch(() => {});
+        await page.close().catch(() => {});
     }
 }
-
-// ============================================================================
-// MAIN
-// ============================================================================
 
 async function main(): Promise<void> {
     await Actor.init();
@@ -1014,8 +665,7 @@ async function main(): Promise<void> {
     }
 
     if (
-        typeof input.startUrl !==
-            'string' ||
+        typeof input.startUrl !== 'string' ||
         !input.startUrl.trim()
     ) {
         throw new Error(
@@ -1024,13 +674,10 @@ async function main(): Promise<void> {
     }
 
     if (
-        input.authState ===
-            undefined ||
-        input.authState ===
-            null ||
+        input.authState === undefined ||
+        input.authState === null ||
         (
-            typeof input.authState ===
-                'string' &&
+            typeof input.authState === 'string' &&
             !input.authState.trim()
         )
     ) {
@@ -1039,34 +686,21 @@ async function main(): Promise<void> {
         );
     }
 
-    const parsedMaxPages =
-        Number(
-            input.maxPages ?? 0,
-        );
+    const maxPagesInput =
+        Number(input.maxPages ?? 0);
 
-    const parsedMaxProfiles =
-        Number(
-            input.maxProfiles ?? 0,
-        );
+    const maxProfilesInput =
+        Number(input.maxProfiles ?? 0);
 
-    /*
-     * In your Input schema:
-     *
-     * 0 = unlimited
-     */
     const maxPages =
-        parsedMaxPages > 0
-            ? Math.floor(
-                parsedMaxPages,
-            )
-            : Number.POSITIVE_INFINITY;
+        maxPagesInput > 0
+            ? Math.floor(maxPagesInput)
+            : Infinity;
 
     const maxProfiles =
-        parsedMaxProfiles > 0
-            ? Math.floor(
-                parsedMaxProfiles,
-            )
-            : Number.POSITIVE_INFINITY;
+        maxProfilesInput > 0
+            ? Math.floor(maxProfilesInput)
+            : Infinity;
 
     console.log(
         `DISCOVERY URL: ${input.startUrl}`,
@@ -1101,10 +735,6 @@ async function main(): Promise<void> {
         `AUTH ORIGINS: ${authState.origins.length}`,
     );
 
-    console.log(
-        'Launching Chromium...',
-    );
-
     const browser: Browser =
         await chromium.launch({
             headless: true,
@@ -1117,37 +747,31 @@ async function main(): Promise<void> {
 
     const context =
         await browser.newContext({
-            storageState:
-                authState as any,
+            storageState: authState as any,
 
             viewport: {
                 width: 1920,
                 height: 1080,
             },
-
-            permissions: [
-                'clipboard-read',
-                'clipboard-write',
-            ],
         });
+
+    await context.grantPermissions(
+        [
+            'clipboard-read',
+            'clipboard-write',
+        ],
+        {
+            origin: 'https://pro.imdb.com',
+        },
+    );
 
     let totalProcessed = 0;
     let totalSaved = 0;
 
     try {
-        // ====================================================================
-        // AUTHENTICATION CHECK
-        // ====================================================================
-
         console.log('');
         console.log(
-            '========================================',
-        );
-        console.log(
-            'CHECKING IMDbPro AUTHENTICATION',
-        );
-        console.log(
-            '========================================',
+            'CHECKING IMDbPro AUTHENTICATION...',
         );
 
         const authPage =
@@ -1167,23 +791,17 @@ async function main(): Promise<void> {
                 3000,
             );
 
-            const authUrl =
-                authPage.url();
-
-            const authTitle =
-                await authPage.title();
-
             console.log(
-                `AUTH URL: ${authUrl}`,
+                `AUTH URL: ${authPage.url()}`,
             );
 
             console.log(
-                `AUTH TITLE: ${authTitle}`,
+                `AUTH TITLE: ${await authPage.title()}`,
             );
 
             if (
                 /signin|login|ap\/signin/i.test(
-                    authUrl,
+                    authPage.url(),
                 )
             ) {
                 throw new Error(
@@ -1195,14 +813,8 @@ async function main(): Promise<void> {
                 'IMDbPro authentication check passed.',
             );
         } finally {
-            await authPage
-                .close()
-                .catch(() => {});
+            await authPage.close().catch(() => {});
         }
-
-        // ====================================================================
-        // DISCOVERY
-        // ====================================================================
 
         const processedIds =
             new Set<string>();
@@ -1235,7 +847,7 @@ async function main(): Promise<void> {
 
             try {
                 const discoveryUrl =
-                    buildPageUrl(
+                    buildDiscoveryUrl(
                         input.startUrl,
                         pageNumber,
                     );
@@ -1244,18 +856,43 @@ async function main(): Promise<void> {
                     `OPENING: ${discoveryUrl}`,
                 );
 
-                try {
-                    await discoveryPage.goto(
-                        discoveryUrl,
-                        {
-                            waitUntil:
-                                'domcontentloaded',
-                            timeout: 60000,
-                        },
-                    );
-                } catch (error) {
+                let loaded = false;
+
+                for (
+                    let attempt = 1;
+                    attempt <= 2;
+                    attempt++
+                ) {
+                    try {
+                        await discoveryPage.goto(
+                            discoveryUrl,
+                            {
+                                waitUntil:
+                                    'domcontentloaded',
+                                timeout: 60000,
+                            },
+                        );
+
+                        loaded = true;
+                        break;
+                    } catch (error) {
+                        console.log(
+                            `DISCOVERY ATTEMPT ${attempt} FAILED: ${errorMessage(error)}`,
+                        );
+
+                        if (
+                            attempt === 1
+                        ) {
+                            await discoveryPage.waitForTimeout(
+                                2000,
+                            );
+                        }
+                    }
+                }
+
+                if (!loaded) {
                     console.log(
-                        `DISCOVERY NAVIGATION FAILED: ${errorMessage(error)}`,
+                        'DISCOVERY PAGE FAILED. MOVING TO NEXT PAGE.',
                     );
 
                     continue;
@@ -1278,44 +915,18 @@ async function main(): Promise<void> {
                     `PROFILE LINKS FOUND: ${profileLinks.length}`,
                 );
 
-                const people: Person[] =
-                    profileLinks
-                        .map(
-                            (
-                                href,
-                            ) => {
-                                const imdbId =
-                                    extractImdbId(
-                                        href,
-                                    );
+                if (
+                    profileLinks.length === 0
+                ) {
+                    console.log(
+                        'NO PROFILE LINKS FOUND. DISCOVERY MAY BE FINISHED.',
+                    );
 
-                                if (
-                                    !imdbId
-                                ) {
-                                    return null;
-                                }
-
-                                return {
-                                    imdbId,
-                                    name: '',
-                                    profileUrl:
-                                        `https://pro.imdb.com/name/${imdbId}/`,
-                                };
-                            },
-                        )
-                        .filter(
-                            (
-                                person,
-                            ): person is Person =>
-                                person !== null,
-                        );
-
-                console.log(
-                    `VALID PROFILES FOUND: ${people.length}`,
-                );
+                    break;
+                }
 
                 for (
-                    const person of people
+                    const profileUrl of profileLinks
                 ) {
                     if (
                         totalProcessed >=
@@ -1324,182 +935,43 @@ async function main(): Promise<void> {
                         break;
                     }
 
+                    const imdbId =
+                        extractImdbId(
+                            profileUrl,
+                        );
+
+                    if (!imdbId) {
+                        continue;
+                    }
+
                     if (
                         processedIds.has(
-                            person.imdbId,
+                            imdbId,
                         )
                     ) {
                         continue;
                     }
 
                     processedIds.add(
-                        person.imdbId,
+                        imdbId,
                     );
 
                     totalProcessed++;
 
-                    /*
-                     * processProfile opens the actual
-                     * IMDbPro profile and extracts the
-                     * profile name + Direct Contact.
-                     */
-                    const profilePage =
-                        await context.newPage();
+                    const person: Person = {
+                        imdbId,
+                        name: '',
+                        profileUrl:
+                            `https://pro.imdb.com/name/${imdbId}/`,
+                    };
 
-                    let result:
-                        DirectContactResult | null =
-                        null;
-
-                    try {
-                        console.log('');
-                        console.log(
-                            `PROCESSING PROFILE ${totalProcessed}`,
-                        );
-                        console.log(
-                            `IMDb ID: ${person.imdbId}`,
-                        );
-                        console.log(
-                            `URL: ${person.profileUrl}`,
+                    const result =
+                        await processProfile(
+                            context,
+                            person,
                         );
 
-                        try {
-                            await profilePage.goto(
-                                person.profileUrl,
-                                {
-                                    waitUntil:
-                                        'domcontentloaded',
-                                    timeout: 60000,
-                                },
-                            );
-                        } catch (error) {
-                            console.log(
-                                `PROFILE NAVIGATION FAILED: ${errorMessage(error)}`,
-                            );
-
-                            continue;
-                        }
-
-                        await profilePage.waitForTimeout(
-                            PROFILE_WAIT_MS,
-                        );
-
-                        const profileName =
-                            await getProfileName(
-                                profilePage,
-                            );
-
-                        person.name =
-                            profileName ||
-                            person.imdbId;
-
-                        console.log(
-                            `PROFILE NAME: ${person.name}`,
-                        );
-
-                        const email =
-                            await extractDirectContactEmail(
-                                profilePage,
-                            );
-
-                        /*
-                         * If Direct Contact was not already
-                         * visible, try the contact control once.
-                         */
-                        if (!email) {
-                            console.log(
-                                'DIRECT CONTACT EMAIL NOT FOUND ON INITIAL CHECK.',
-                            );
-
-                            const contactControl =
-                                await findContactControl(
-                                    profilePage,
-                                );
-
-                            if (
-                                contactControl
-                            ) {
-                                console.log(
-                                    'CONTACT CONTROL FOUND. CLICKING TO RECHECK DIRECT CONTACT...',
-                                );
-
-                                const clicked =
-                                    await safeClick(
-                                        contactControl,
-                                    );
-
-                                if (
-                                    clicked
-                                ) {
-                                    await profilePage.waitForTimeout(
-                                        DIRECT_CONTACT_WAIT_MS,
-                                    );
-                                }
-                            }
-
-                            const retryEmail =
-                                await extractDirectContactEmail(
-                                    profilePage,
-                                );
-
-                            if (
-                                retryEmail
-                            ) {
-                                result = {
-                                    imdbId:
-                                        person.imdbId,
-                                    profileUrl:
-                                        person.profileUrl,
-                                    name:
-                                        person.name,
-                                    email:
-                                        retryEmail,
-                                };
-                            }
-                        } else {
-                            result = {
-                                imdbId:
-                                    person.imdbId,
-                                profileUrl:
-                                    person.profileUrl,
-                                name:
-                                    person.name,
-                                email,
-                            };
-                        }
-                    } catch (error) {
-                        console.log(
-                            `PROFILE ERROR: ${errorMessage(error)}`,
-                        );
-                    } finally {
-                        await profilePage
-                            .close()
-                            .catch(
-                                () => {},
-                            );
-                    }
-
-                    /*
-                     * ========================================================
-                     * DATASET SAFETY RULE
-                     * ========================================================
-                     *
-                     * ONLY push when:
-                     *
-                     * 1. Direct Contact section was found.
-                     * 2. Direct Contact copy button was clicked.
-                     * 3. Clipboard contained an email.
-                     *
-                     * No email = NO DATASET ROW.
-                     */
                     if (!result) {
-                        console.log(
-                            'NO VALID DIRECT CONTACT EMAIL.',
-                        );
-
-                        console.log(
-                            'NOT SAVED TO DATASET.',
-                        );
-
                         continue;
                     }
 
@@ -1513,23 +985,18 @@ async function main(): Promise<void> {
                     console.log(
                         '*** DIRECT CONTACT SAVED ***',
                     );
-
                     console.log(
                         `IMDb ID: ${result.imdbId}`,
                     );
-
                     console.log(
                         `NAME: ${result.name}`,
                     );
-
                     console.log(
                         `EMAIL: ${result.email}`,
                     );
-
                     console.log(
                         `PROFILES PROCESSED: ${totalProcessed}`,
                     );
-
                     console.log(
                         `DIRECT CONTACTS SAVED: ${totalSaved}`,
                     );
@@ -1565,17 +1032,8 @@ async function main(): Promise<void> {
             `DIRECT CONTACTS SAVED: ${totalSaved}`,
         );
     } finally {
-        console.log(
-            'Closing browser...',
-        );
-
-        await context
-            .close()
-            .catch(() => {});
-
-        await browser
-            .close()
-            .catch(() => {});
+        await context.close().catch(() => {});
+        await browser.close().catch(() => {});
     }
 
     await Actor.exit(
@@ -1583,26 +1041,22 @@ async function main(): Promise<void> {
     );
 }
 
-main().catch(
-    async (error) => {
-        console.error('');
-        console.error(
-            '========================================',
-        );
-        console.error(
-            'ACTOR FAILED',
-        );
-        console.error(
-            '========================================',
-        );
+main().catch(async (error) => {
+    console.error('');
+    console.error(
+        '========================================',
+    );
+    console.error(
+        'ACTOR FAILED',
+    );
+    console.error(
+        '========================================',
+    );
 
-        console.error(
-            errorMessage(error),
-        );
+    const message =
+        errorMessage(error);
 
-        await Actor.fail(
-            errorMessage(error),
-        );
-    },
-);
-```
+    console.error(message);
+
+    await Actor.fail(message);
+});
