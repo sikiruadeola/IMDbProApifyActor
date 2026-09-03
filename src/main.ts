@@ -2,7 +2,6 @@ import { Actor } from 'apify';
 import {
     chromium,
     type Browser,
-    type BrowserContext,
     type Locator,
     type Page,
 } from 'playwright';
@@ -13,14 +12,6 @@ import {
 
 interface Input {
     startUrl: string;
-
-    /**
-     * Paste the COMPLETE contents of imdb-auth-state.json here.
-     *
-     * The Actor accepts either:
-     * - a JSON object
-     * - a string containing the JSON object
-     */
     authState: unknown;
 
     /**
@@ -50,11 +41,10 @@ interface ContactResult {
 }
 
 /**
- * We intentionally define the storage state ourselves instead of importing
- * StorageState from Playwright.
+ * Playwright storage-state structure.
  *
- * Your installed Playwright version does not export StorageState as a named
- * type, which caused the previous build failure.
+ * We define this locally so that the Actor accepts the JSON object
+ * returned by Playwright storageState().
  */
 interface PlaywrightCookie {
     name: string;
@@ -85,6 +75,9 @@ interface PlaywrightStorageState {
 const PROFILE_WAIT_MS = 3_000;
 const DISCOVERY_WAIT_MS = 5_000;
 const CONTACT_WAIT_MS = 2_500;
+
+const NAVIGATION_TIMEOUT_MS = 120_000;
+const CLICK_TIMEOUT_MS = 10_000;
 
 // ============================================================================
 // GENERAL HELPERS
@@ -118,7 +111,7 @@ function extractEmail(text: string): string | null {
     return match ? match[0] : null;
 }
 
-function extractUrl(text: string): string | null {
+function extractHttpUrl(text: string): string | null {
     const match = text.match(
         /https?:\/\/[^\s<>"']+/i,
     );
@@ -158,6 +151,35 @@ function getUrlForPage(
     );
 
     return url.toString();
+}
+
+function normalizeLimit(
+    value: unknown,
+    fieldName: string,
+): number {
+    if (
+        value === undefined
+        || value === null
+        || value === ''
+    ) {
+        return 0;
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+        throw new Error(
+            `${fieldName} must be a valid number.`,
+        );
+    }
+
+    if (numberValue < 0) {
+        throw new Error(
+            `${fieldName} cannot be negative.`,
+        );
+    }
+
+    return Math.floor(numberValue);
 }
 
 // ============================================================================
@@ -237,33 +259,6 @@ async function isVisible(
     }
 }
 
-async function safeClick(
-    locator: Locator,
-): Promise<boolean> {
-    try {
-        await locator
-            .scrollIntoViewIfNeeded()
-            .catch(() => {});
-
-        await locator.click({
-            timeout: 10_000,
-        });
-
-        return true;
-    } catch {
-        try {
-            await locator.click({
-                timeout: 10_000,
-                force: true,
-            });
-
-            return true;
-        } catch {
-            return false;
-        }
-    }
-}
-
 async function getFirstVisibleLocator(
     page: Page,
     selectors: string[],
@@ -275,8 +270,8 @@ async function getFirstVisibleLocator(
             .count()
             .catch(() => 0);
 
-        for (let i = 0; i < count; i++) {
-            const candidate = locator.nth(i);
+        for (let index = 0; index < count; index++) {
+            const candidate = locator.nth(index);
 
             if (await isVisible(candidate)) {
                 return candidate;
@@ -285,6 +280,33 @@ async function getFirstVisibleLocator(
     }
 
     return null;
+}
+
+async function safeClick(
+    locator: Locator,
+): Promise<boolean> {
+    try {
+        await locator
+            .scrollIntoViewIfNeeded()
+            .catch(() => {});
+
+        await locator.click({
+            timeout: CLICK_TIMEOUT_MS,
+        });
+
+        return true;
+    } catch {
+        try {
+            await locator.click({
+                timeout: CLICK_TIMEOUT_MS,
+                force: true,
+            });
+
+            return true;
+        } catch {
+            return false;
+        }
+    }
 }
 
 // ============================================================================
@@ -308,10 +330,10 @@ async function getCleanProfileName(
             .count()
             .catch(() => 0);
 
-        for (let i = 0; i < count; i++) {
+        for (let index = 0; index < count; index++) {
             const text = normalizeText(
                 await locator
-                    .nth(i)
+                    .nth(index)
                     .innerText()
                     .catch(() => ''),
             );
@@ -368,8 +390,8 @@ async function findContactButton(
         .count()
         .catch(() => 0);
 
-    for (let i = 0; i < count; i++) {
-        const candidate = textCandidates.nth(i);
+    for (let index = 0; index < count; index++) {
+        const candidate = textCandidates.nth(index);
 
         if (!await isVisible(candidate)) {
             continue;
@@ -389,8 +411,6 @@ async function findContactButton(
         ) {
             return clickable;
         }
-
-        return candidate;
     }
 
     return null;
@@ -402,7 +422,7 @@ async function findContactButton(
 
 async function findContactContainer(
     page: Page,
-): Promise<Locator> {
+): Promise<Locator | null> {
     const selectors = [
         '[role="dialog"]',
         '[aria-modal="true"]',
@@ -410,16 +430,10 @@ async function findContactContainer(
         '[class*="contact" i]',
     ];
 
-    const found = await getFirstVisibleLocator(
+    return getFirstVisibleLocator(
         page,
         selectors,
     );
-
-    if (found) {
-        return found;
-    }
-
-    return page.locator('body');
 }
 
 // ============================================================================
@@ -437,9 +451,9 @@ async function getLinks(
 
     const result: string[] = [];
 
-    for (let i = 0; i < count; i++) {
+    for (let index = 0; index < count; index++) {
         const href = await links
-            .nth(i)
+            .nth(index)
             .getAttribute('href')
             .catch(() => null);
 
@@ -447,17 +461,48 @@ async function getLinks(
             continue;
         }
 
-        if (
-            href.startsWith('http://')
-            || href.startsWith('https://')
-        ) {
-            result.push(href);
-        }
+        result.push(href.trim());
     }
 
     return [
         ...new Set(result),
     ];
+}
+
+function getEmailFromLinks(
+    links: string[],
+): string | null {
+    for (const link of links) {
+        if (!link.toLowerCase().startsWith('mailto:')) {
+            continue;
+        }
+
+        const value = link
+            .slice('mailto:'.length)
+            .split('?')[0]
+            .trim();
+
+        if (value) {
+            return value;
+        }
+    }
+
+    return null;
+}
+
+function getHttpUrlFromLinks(
+    links: string[],
+): string | null {
+    for (const link of links) {
+        if (
+            link.startsWith('https://')
+            || link.startsWith('http://')
+        ) {
+            return link;
+        }
+    }
+
+    return null;
 }
 
 // ============================================================================
@@ -485,15 +530,13 @@ async function getDirectContact(
                 'Contact control not immediately visible. Scrolling profile...',
             );
 
-            for (let i = 0; i < 6; i++) {
+            for (let index = 0; index < 6; index++) {
                 await page.mouse.wheel(
                     0,
                     900,
                 );
 
-                await page.waitForTimeout(
-                    700,
-                );
+                await page.waitForTimeout(700);
 
                 button = await findContactButton(page);
 
@@ -505,7 +548,7 @@ async function getDirectContact(
 
         if (!button) {
             console.log(
-                'Direct Contact button not found on this profile.',
+                'Contact control not found on this profile.',
             );
 
             return {
@@ -520,6 +563,8 @@ async function getDirectContact(
         console.log(
             'Contact control found. Clicking...',
         );
+
+        const urlBeforeClick = page.url();
 
         const clicked = await safeClick(button);
 
@@ -537,9 +582,32 @@ async function getDirectContact(
             CONTACT_WAIT_MS,
         );
 
-        const root = await findContactContainer(
-            page,
-        );
+        let root = await findContactContainer(page);
+
+        const navigated =
+            page.url() !== urlBeforeClick;
+
+        if (!root && navigated) {
+            console.log(
+                'Contact control navigated to a new page.',
+            );
+
+            root = page.locator('body');
+        }
+
+        if (!root) {
+            console.log(
+                'Contact control was clicked, but no contact content container appeared.',
+            );
+
+            return {
+                status: 'not_found',
+                email: null,
+                url: null,
+                raw: null,
+                error: null,
+            };
+        }
 
         const visibleText = normalizeText(
             await root
@@ -564,16 +632,13 @@ async function getDirectContact(
             `Contact links found: ${links.length}`,
         );
 
-        const email = extractEmail(combined);
+        const email =
+            getEmailFromLinks(links)
+            ?? extractEmail(combined);
 
-        let contactUrl = extractUrl(combined);
-
-        if (
-            !contactUrl
-            && links.length > 0
-        ) {
-            contactUrl = links[0];
-        }
+        const contactUrl =
+            getHttpUrlFromLinks(links)
+            ?? extractHttpUrl(combined);
 
         if (
             visibleText
@@ -636,7 +701,7 @@ async function processPerson(
             person.profileUrl,
             {
                 waitUntil: 'domcontentloaded',
-                timeout: 120_000,
+                timeout: NAVIGATION_TIMEOUT_MS,
             },
         );
 
@@ -709,193 +774,146 @@ async function processPerson(
 }
 
 // ============================================================================
-// ACTOR START
+// ACTOR
 // ============================================================================
 
-await Actor.init();
+await Actor.main(async () => {
+    let browser: Browser | null = null;
 
-let browser: Browser | null = null;
+    try {
+        console.log('');
+        console.log('========================================');
+        console.log('IMDbPro CONTACT SCRAPER STARTING');
+        console.log('========================================');
 
-try {
-    const input =
-        await Actor.getInput<Input>();
-
-    if (
-        !input
-        || !input.startUrl
-        || !input.startUrl.trim()
-    ) {
-        throw new Error(
-            'startUrl is required.',
-        );
-    }
-
-    const startUrl =
-        input.startUrl.trim();
-
-    new URL(startUrl);
-
-    const storageState =
-        parseStorageState(
-            input.authState,
+        console.log(
+            'Reading Actor input...',
         );
 
-    const maxPages = Math.max(
-        0,
-        Number(input.maxPages ?? 0),
-    );
+        const input =
+            await Actor.getInput<Input>();
 
-    const maxProfiles = Math.max(
-        0,
-        Number(input.maxProfiles ?? 0),
-    );
-
-    const startPage =
-        getPageNumberFromUrl(
-            startUrl,
-        );
-
-    console.log('');
-    console.log('========================================');
-    console.log('IMDbPro CONTACT SCRAPER');
-    console.log('========================================');
-    console.log(`START URL: ${startUrl}`);
-    console.log(`START PAGE: ${startPage}`);
-
-    console.log(
-        `MAX PAGES: ${
-            maxPages === 0
-                ? 'UNLIMITED'
-                : maxPages
-        }`,
-    );
-
-    console.log(
-        `MAX PROFILES: ${
-            maxProfiles === 0
-                ? 'UNLIMITED'
-                : maxProfiles
-        }`,
-    );
-
-    // ========================================================================
-    // BROWSER
-    // ========================================================================
-
-    browser = await chromium.launch({
-        headless: true,
-    });
-
-    const context: BrowserContext =
-        await browser.newContext({
-            storageState,
-
-            viewport: {
-                width: 1920,
-                height: 1080,
-            },
-        });
-
-    const discoveryPage =
-        await context.newPage();
-
-    const profilePage =
-        await context.newPage();
-
-    // ========================================================================
-    // VERIFY AUTHENTICATION
-    // ========================================================================
-
-    console.log('');
-    console.log(
-        'Verifying IMDbPro authentication...',
-    );
-
-    await discoveryPage.goto(
-        startUrl,
-        {
-            waitUntil: 'domcontentloaded',
-            timeout: 120_000,
-        },
-    );
-
-    await discoveryPage.waitForTimeout(
-        DISCOVERY_WAIT_MS,
-    );
-
-    console.log(
-        `AUTH CHECK URL: ${discoveryPage.url()}`,
-    );
-
-    console.log(
-        `AUTH CHECK TITLE: ${await discoveryPage.title()}`,
-    );
-
-    if (
-        /login|signin|sign-in/i.test(
-            discoveryPage.url(),
-        )
-    ) {
-        throw new Error(
-            'IMDbPro authentication appears to have failed. Generate a fresh imdb-auth-state.json and paste its complete contents into authState.',
-        );
-    }
-
-    // ========================================================================
-    // PAGINATION
-    // ========================================================================
-
-    const seenIds = new Set<string>();
-
-    let pageNumber = startPage;
-    let pagesProcessed = 0;
-    let profilesProcessed = 0;
-    let contactsFound = 0;
-
-    while (true) {
-        if (
-            maxPages > 0
-            && pagesProcessed >= maxPages
-        ) {
-            console.log(
-                'Maximum page limit reached.',
+        if (!input) {
+            throw new Error(
+                'Actor input is missing.',
             );
-
-            break;
         }
 
         if (
-            maxProfiles > 0
-            && profilesProcessed >= maxProfiles
+            !input.startUrl
+            || !input.startUrl.trim()
         ) {
-            console.log(
-                'Maximum profile limit reached.',
+            throw new Error(
+                'startUrl is required.',
             );
-
-            break;
         }
 
-        const discoveryUrl =
-            pageNumber === startPage
-                ? startUrl
-                : getUrlForPage(
-                    startUrl,
-                    pageNumber,
-                );
+        const startUrl =
+            input.startUrl.trim();
+
+        console.log(
+            'Validating discovery URL...',
+        );
+
+        new URL(startUrl);
+
+        console.log(
+            'Parsing authentication state...',
+        );
+
+        const storageState =
+            parseStorageState(
+                input.authState,
+            );
+
+        const maxPages =
+            normalizeLimit(
+                input.maxPages,
+                'maxPages',
+            );
+
+        const maxProfiles =
+            normalizeLimit(
+                input.maxProfiles,
+                'maxProfiles',
+            );
+
+        const startPage =
+            getPageNumberFromUrl(
+                startUrl,
+            );
 
         console.log('');
         console.log('========================================');
-        console.log(
-            `OPENING DISCOVERY PAGE ${pageNumber}`,
-        );
+        console.log('IMDbPro CONTACT SCRAPER');
         console.log('========================================');
-        console.log(discoveryUrl);
+        console.log(
+            `START URL: ${startUrl}`,
+        );
+        console.log(
+            `START PAGE: ${startPage}`,
+        );
+        console.log(
+            `MAX PAGES: ${
+                maxPages === 0
+                    ? 'UNLIMITED'
+                    : maxPages
+            }`,
+        );
+        console.log(
+            `MAX PROFILES: ${
+                maxProfiles === 0
+                    ? 'UNLIMITED'
+                    : maxProfiles
+            }`,
+        );
+
+        // ====================================================================
+        // BROWSER
+        // ====================================================================
+
+        console.log(
+            'Launching Chromium...',
+        );
+
+        browser = await chromium.launch({
+            headless: true,
+        });
+
+        console.log(
+            'Creating authenticated browser context...',
+        );
+
+        const context =
+            await browser.newContext({
+                storageState,
+
+                viewport: {
+                    width: 1920,
+                    height: 1080,
+                },
+            });
+
+        const discoveryPage =
+            await context.newPage();
+
+        const profilePage =
+            await context.newPage();
+
+        // ====================================================================
+        // VERIFY AUTHENTICATION
+        // ====================================================================
+
+        console.log('');
+        console.log(
+            'Verifying IMDbPro authentication...',
+        );
 
         await discoveryPage.goto(
-            discoveryUrl,
+            startUrl,
             {
                 waitUntil: 'domcontentloaded',
-                timeout: 120_000,
+                timeout: NAVIGATION_TIMEOUT_MS,
             },
         );
 
@@ -904,194 +922,292 @@ try {
         );
 
         console.log(
-            `ACTUAL URL: ${discoveryPage.url()}`,
+            `AUTH CHECK URL: ${discoveryPage.url()}`,
         );
-
-        const links =
-            discoveryPage.locator(
-                'a[href*="/name/nm"]',
-            );
-
-        const linkCount =
-            await links.count();
 
         console.log(
-            `NAME LINKS FOUND: ${linkCount}`,
+            `AUTH CHECK TITLE: ${await discoveryPage.title()}`,
         );
 
-        if (linkCount === 0) {
-            console.log(
-                'No profile links found. Stopping.',
+        if (
+            /login|signin|sign-in|registration/i.test(
+                discoveryPage.url(),
+            )
+        ) {
+            throw new Error(
+                'IMDbPro authentication appears to have failed. Generate a fresh imdb-auth-state.json and paste its complete contents into authState.',
             );
-
-            break;
         }
 
-        const people: Person[] = [];
+        // ====================================================================
+        // PAGINATION
+        // ====================================================================
 
-        for (
-            let i = 0;
-            i < linkCount;
-            i++
-        ) {
+        const seenIds =
+            new Set<string>();
+
+        let pageNumber =
+            startPage;
+
+        let pagesProcessed =
+            0;
+
+        let profilesProcessed =
+            0;
+
+        let contactsFound =
+            0;
+
+        while (true) {
             if (
-                maxProfiles > 0
-                && (
-                    profilesProcessed
-                    + people.length
-                ) >= maxProfiles
+                maxPages > 0
+                && pagesProcessed >= maxPages
             ) {
+                console.log(
+                    'Maximum page limit reached.',
+                );
+
                 break;
             }
 
-            const link =
-                links.nth(i);
-
-            const href =
-                await link.getAttribute(
-                    'href',
-                );
-
-            if (!href) {
-                continue;
-            }
-
-            const imdbId =
-                extractImdbId(href);
-
-            if (!imdbId) {
-                continue;
-            }
-
-            if (
-                seenIds.has(imdbId)
-            ) {
-                continue;
-            }
-
-            seenIds.add(imdbId);
-
-            const fallbackName =
-                normalizeText(
-                    await link
-                        .innerText()
-                        .catch(() => ''),
-                );
-
-            const profileUrl =
-                new URL(
-                    href,
-                    discoveryPage.url(),
-                ).toString();
-
-            people.push({
-                imdbId,
-                name:
-                    fallbackName
-                    || imdbId,
-                profileUrl,
-                discoveryPage:
-                    pageNumber,
-            });
-        }
-
-        console.log(
-            `UNIQUE PROFILES ON PAGE: ${people.length}`,
-        );
-
-        if (people.length === 0) {
-            console.log(
-                'No new profiles found. Stopping.',
-            );
-
-            break;
-        }
-
-        // ====================================================================
-        // PROCESS PROFILES
-        // ====================================================================
-
-        for (const person of people) {
             if (
                 maxProfiles > 0
                 && profilesProcessed >= maxProfiles
             ) {
+                console.log(
+                    'Maximum profile limit reached.',
+                );
+
                 break;
             }
 
-            const found =
-                await processPerson(
-                    profilePage,
-                    person,
+            const discoveryUrl =
+                pageNumber === startPage
+                    ? startUrl
+                    : getUrlForPage(
+                        startUrl,
+                        pageNumber,
+                    );
+
+            console.log('');
+            console.log('========================================');
+            console.log(
+                `OPENING DISCOVERY PAGE ${pageNumber}`,
+            );
+            console.log('========================================');
+            console.log(
+                discoveryUrl,
+            );
+
+            await discoveryPage.goto(
+                discoveryUrl,
+                {
+                    waitUntil: 'domcontentloaded',
+                    timeout: NAVIGATION_TIMEOUT_MS,
+                },
+            );
+
+            await discoveryPage.waitForTimeout(
+                DISCOVERY_WAIT_MS,
+            );
+
+            console.log(
+                `ACTUAL URL: ${discoveryPage.url()}`,
+            );
+
+            const links =
+                discoveryPage.locator(
+                    'a[href*="/name/nm"]',
                 );
 
-            profilesProcessed++;
+            const linkCount =
+                await links.count();
 
-            if (found) {
-                contactsFound++;
+            console.log(
+                `NAME LINKS FOUND: ${linkCount}`,
+            );
+
+            if (linkCount === 0) {
+                console.log(
+                    'No profile links found. Stopping.',
+                );
+
+                break;
             }
+
+            const people: Person[] = [];
+
+            for (
+                let index = 0;
+                index < linkCount;
+                index++
+            ) {
+                if (
+                    maxProfiles > 0
+                    && (
+                        profilesProcessed
+                        + people.length
+                    ) >= maxProfiles
+                ) {
+                    break;
+                }
+
+                const link =
+                    links.nth(index);
+
+                const href =
+                    await link.getAttribute(
+                        'href',
+                    );
+
+                if (!href) {
+                    continue;
+                }
+
+                const imdbId =
+                    extractImdbId(href);
+
+                if (!imdbId) {
+                    continue;
+                }
+
+                if (
+                    seenIds.has(imdbId)
+                ) {
+                    continue;
+                }
+
+                seenIds.add(imdbId);
+
+                const fallbackName =
+                    normalizeText(
+                        await link
+                            .innerText()
+                            .catch(() => ''),
+                    );
+
+                const profileUrl =
+                    new URL(
+                        href,
+                        discoveryPage.url(),
+                    ).toString();
+
+                people.push({
+                    imdbId,
+
+                    name:
+                        fallbackName
+                        || imdbId,
+
+                    profileUrl,
+
+                    discoveryPage:
+                        pageNumber,
+                });
+            }
+
+            console.log(
+                `UNIQUE PROFILES ON PAGE: ${people.length}`,
+            );
+
+            if (people.length === 0) {
+                console.log(
+                    'No new profiles found. Stopping.',
+                );
+
+                break;
+            }
+
+            // ================================================================
+            // PROCESS PROFILES
+            // ================================================================
+
+            for (const person of people) {
+                if (
+                    maxProfiles > 0
+                    && profilesProcessed >= maxProfiles
+                ) {
+                    break;
+                }
+
+                const found =
+                    await processPerson(
+                        profilePage,
+                        person,
+                    );
+
+                profilesProcessed++;
+
+                if (found) {
+                    contactsFound++;
+                }
+
+                console.log(
+                    `TOTAL PROFILES PROCESSED: ${profilesProcessed}`,
+                );
+
+                console.log(
+                    `CONTACTS CONFIRMED SO FAR: ${contactsFound}`,
+                );
+            }
+
+            pagesProcessed++;
+
+            console.log('');
+            console.log(
+                `COMPLETED DISCOVERY PAGE ${pageNumber}`,
+            );
+
+            console.log(
+                `TOTAL UNIQUE IMDb IDs: ${seenIds.size}`,
+            );
 
             console.log(
                 `TOTAL PROFILES PROCESSED: ${profilesProcessed}`,
             );
 
             console.log(
-                `CONTACTS CONFIRMED SO FAR: ${contactsFound}`,
+                `TOTAL CONTACTS FOUND: ${contactsFound}`,
             );
+
+            pageNumber++;
         }
 
-        pagesProcessed++;
+        await context.close();
 
         console.log('');
+        console.log('========================================');
+        console.log('SCRAPING FINISHED');
+        console.log('========================================');
+
         console.log(
-            `COMPLETED DISCOVERY PAGE ${pageNumber}`,
+            `PAGES PROCESSED: ${pagesProcessed}`,
         );
 
         console.log(
-            `TOTAL UNIQUE IMDb IDs: ${seenIds.size}`,
+            `UNIQUE PROFILES: ${seenIds.size}`,
         );
 
         console.log(
-            `TOTAL PROFILES PROCESSED: ${profilesProcessed}`,
+            `PROFILES PROCESSED: ${profilesProcessed}`,
         );
 
         console.log(
-            `TOTAL CONTACTS FOUND: ${contactsFound}`,
+            `CONTACTS FOUND: ${contactsFound}`,
         );
+    } finally {
+        if (browser) {
+            console.log(
+                'Closing browser...',
+            );
 
-        pageNumber++;
+            await browser
+                .close()
+                .catch((error: unknown) => {
+                    console.error(
+                        `Browser close error: ${getErrorMessage(error)}`,
+                    );
+                });
+        }
     }
-
-    await profilePage.close();
-    await discoveryPage.close();
-    await context.close();
-
-    console.log('');
-    console.log('========================================');
-    console.log('SCRAPING FINISHED');
-    console.log('========================================');
-
-    console.log(
-        `PAGES PROCESSED: ${pagesProcessed}`,
-    );
-
-    console.log(
-        `UNIQUE PROFILES: ${seenIds.size}`,
-    );
-
-    console.log(
-        `PROFILES PROCESSED: ${profilesProcessed}`,
-    );
-
-    console.log(
-        `CONTACTS FOUND: ${contactsFound}`,
-    );
-} finally {
-    if (browser) {
-        await browser
-            .close()
-            .catch(() => {});
-    }
-
-    await Actor.exit();
-}
+});
