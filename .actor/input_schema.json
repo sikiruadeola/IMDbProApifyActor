@@ -1,21 +1,21 @@
 {
     "$schema": "https://apify.com/schemas/v1/input.ide.json",
     "title": "IMDbPro Contact Scraper",
-    "description": "Scrape people from an IMDbPro discovery URL and extract available Direct Contact information using the IMDbPro authentication state supplied for this run.",
+    "description": "Scrape people from an IMDbPro discovery URL and save the Direct Contact card only, exactly as it appears, for anyone whose Direct Contact includes an email.",
     "type": "object",
     "schemaVersion": 1,
     "properties": {
         "startUrl": {
             "title": "IMDbPro Discovery URL",
             "type": "string",
-            "description": "Paste the exact IMDbPro discovery/search URL you want to scrape.",
+            "description": "Paste the exact IMDbPro discovery/search URL you want to scrape, including your STARmeter range and any other filters already applied.",
             "editor": "textfield",
             "prefill": ""
         },
         "authState": {
-            "title": "IMDbPro Authentication State",
+            "title": "IMDbPro Authentication State (optional)",
             "type": "string",
-            "description": "Paste the complete Playwright storage-state JSON for the IMDbPro account/session you want to use. This should normally contain cookies and origins.",
+            "description": "Leave this blank to use the session already built into the actor. Only fill this in if you want to run this specific job under a different IMDbPro session.",
             "editor": "textarea",
             "isSecret": true,
             "prefill": ""
@@ -38,7 +38,6 @@
         }
     },
     "required": [
-        "startUrl",
-        "authState"
+        "startUrl"
     ]
 }
