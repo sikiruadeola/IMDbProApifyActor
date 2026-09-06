@@ -329,45 +329,33 @@ async function getCopyButtonWithin(container: Locator): Promise<Locator | null> 
     return null;
 }
 
-// Strategy A: the Direct Contact heading and its own card body are expected
-// to sit as immediate siblings, one right after the other, with the next
-// heading (Company, Guild, whatever comes next) starting a new sibling after
-// that. This keeps us from ever touching a neighbouring card.
-async function tryFollowingSiblingStrategy(
+// The Direct Contact heading and its own copy button live close together
+// on the page, but neighbouring cards (Company, Guild, Agent) sit nearby in
+// the same sidebar, so demanding a container completely free of their text
+// was too strict and skipped genuine Direct Contact cards. Instead we take
+// the smallest container, starting from the heading's own sibling and
+// widening one level at a time, that contains a copy button, with no purity
+// filtering at this stage. Whether that copy button truly belongs to Direct
+// Contact is decided afterwards, by checking the actual copied text, not by
+// guessing from surrounding DOM text beforehand.
+async function findNearestCopyButtonContainer(
     heading: Locator,
 ): Promise<Locator | null> {
     const sibling = heading.locator('xpath=following-sibling::*[1]');
-    const count = await sibling.count().catch(() => 0);
+    const siblingCount = await sibling.count().catch(() => 0);
 
-    if (count === 0) return null;
-    if (!(await isVisible(sibling))) return null;
+    if (siblingCount > 0 && (await isVisible(sibling))) {
+        const siblingCopyButton = await getCopyButtonWithin(sibling);
+        if (siblingCopyButton) {
+            return sibling;
+        }
+    }
 
-    const text = normalizeText(await sibling.innerText().catch(() => ''));
-
-    if (containsOtherCategory(text)) return null;
-
-    const copyButton = await getCopyButtonWithin(sibling);
-
-    return copyButton ? sibling : null;
-}
-
-// Strategy B: fall back to walking up from the heading, but at every level
-// we insist the container's text does NOT contain any other category's
-// wording. The first level that has a copy button and stays clean wins. If
-// every level that has a copy button is also carrying another category's
-// text, we give up rather than guess.
-async function tryAncestorWalkStrategy(
-    heading: Locator,
-): Promise<Locator | null> {
     for (let level = 1; level <= 6; level++) {
         const container = heading.locator(`xpath=ancestor::*[${level}]`);
         const count = await container.count().catch(() => 0);
 
         if (count === 0) continue;
-
-        const text = normalizeText(await container.innerText().catch(() => ''));
-
-        if (containsOtherCategory(text)) continue;
 
         const copyButton = await getCopyButtonWithin(container);
 
@@ -427,24 +415,17 @@ async function extractDirectContact(page: Page): Promise<DirectContactResult> {
         await heading.click({ timeout: 8_000 }).catch(() => undefined);
         await page.waitForTimeout(DIRECT_CONTACT_WAIT);
 
-        let card = await tryFollowingSiblingStrategy(heading);
-        let strategyUsed = 'sibling';
-
-        if (!card) {
-            card = await tryAncestorWalkStrategy(heading);
-            strategyUsed = 'ancestor';
-        }
+        const card = await findNearestCopyButtonContainer(heading);
 
         if (!card) {
             console.log(
-                'DIRECT CONTACT: could not isolate a clean container without ' +
-                    'other categories mixed in. Skipping rather than risk the ' +
-                    'wrong contact.',
+                'DIRECT CONTACT: heading found but no nearby copy button could ' +
+                    'be located. Skipping rather than risk the wrong contact.',
             );
             return { raw: null, status: 'no_copy_button', error: null };
         }
 
-        console.log(`DIRECT CONTACT: card isolated using ${strategyUsed} strategy.`);
+        console.log('DIRECT CONTACT: nearest copy button located.');
 
         const copyButton = await getCopyButtonWithin(card);
 
