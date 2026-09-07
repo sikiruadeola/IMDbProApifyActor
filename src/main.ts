@@ -573,7 +573,36 @@ try {
     console.log('Only cards with a heading that says exactly "Direct Contact" are ever touched.');
     console.log('Dataset behaviour: SAVE IMMEDIATELY AFTER EACH VALID DIRECT CONTACT');
 
-    browser = await chromium.launch({ headless: true });
+    // Route everything through Apify's own proxy addresses, included free
+    // on every plan, instead of the container's single fixed address. One
+    // session id is used for the whole run so IMDbPro sees one consistent
+    // address throughout, rather than switching mid session.
+    let launchProxy: { server: string; username?: string; password?: string } | undefined;
+
+    try {
+        const proxyConfiguration = await Actor.createProxyConfiguration();
+
+        if (proxyConfiguration) {
+            const sessionId = `imdbpro_${Math.floor(Math.random() * 1_000_000)}`;
+            const proxyUrl = await proxyConfiguration.newUrl(sessionId);
+
+            if (proxyUrl) {
+                const parsed = new URL(proxyUrl);
+
+                launchProxy = {
+                    server: `${parsed.protocol}//${parsed.host}`,
+                    username: decodeURIComponent(parsed.username),
+                    password: decodeURIComponent(parsed.password),
+                };
+
+                console.log('Using Apify proxy for this run.');
+            }
+        }
+    } catch (error) {
+        console.log(`Could not set up Apify proxy, continuing without it: ${errorMessage(error)}`);
+    }
+
+    browser = await chromium.launch({ headless: true, proxy: launchProxy });
 
     context = await browser.newContext({
         storageState: authState as any,
