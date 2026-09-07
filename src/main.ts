@@ -277,14 +277,18 @@ async function discoverPeople(
 // for example accordion-item-direct-contact-item. This is a hard, stable
 // hook to the exact right section, no guessing from nearby text needed.
 async function findDirectContactContainer(page: Page): Promise<Locator | null> {
-    const candidates = page.locator('[id*="direct-contact" i]');
-    const count = await candidates.count().catch(() => 0);
+    const candidate = page.locator('[id*="direct-contact" i]').first();
 
-    for (let i = 0; i < count; i++) {
-        const candidate = candidates.nth(i);
-        if (await isVisible(candidate)) {
-            return candidate;
-        }
+    // This section can render a moment after the rest of the page, so wait
+    // for it to actually attach rather than checking once and giving up.
+    try {
+        await candidate.waitFor({ state: 'attached', timeout: 10_000 });
+    } catch {
+        return null;
+    }
+
+    if (await isVisible(candidate)) {
+        return candidate;
     }
 
     return null;
