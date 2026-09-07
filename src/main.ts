@@ -465,7 +465,12 @@ async function processProfile(page: Page, person: Person): Promise<PersonRecord 
             timeout: PROFILE_TIMEOUT,
         });
 
-        await page.waitForTimeout(3_000);
+        // Most of this page's real content, including contacts, loads in
+        // through separate background data calls after the page itself
+        // finishes loading. Waiting for that background activity to settle
+        // is far more reliable than guessing a fixed number of seconds.
+        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+        await page.waitForTimeout(1_500);
 
         console.log(`PROFILE URL: ${page.url()}`);
 
