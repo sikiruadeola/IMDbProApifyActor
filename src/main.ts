@@ -279,12 +279,28 @@ async function discoverPeople(
 async function findDirectContactContainer(page: Page): Promise<Locator | null> {
     const candidate = page.locator('[id*="direct-contact" i]').first();
 
-    // This section can render a moment after the rest of the page, so wait
-    // for it to actually attach rather than checking once and giving up.
-    try {
-        await candidate.waitFor({ state: 'attached', timeout: 10_000 });
-    } catch {
-        return null;
+    const alreadyThere = await candidate
+        .waitFor({ state: 'attached', timeout: 3_000 })
+        .then(() => true)
+        .catch(() => false);
+
+    if (!alreadyThere) {
+        // The section's own content is only built into the page once its
+        // accordion is opened. On a fresh visit it usually starts closed, so
+        // find the toggle that controls it by the same id pattern and open
+        // it first, then look again.
+        const toggle = page.locator('[aria-controls*="direct-contact" i]').first();
+        const toggleCount = await toggle.count().catch(() => 0);
+
+        if (toggleCount > 0) {
+            await toggle.click({ timeout: 8_000 }).catch(() => undefined);
+        }
+
+        try {
+            await candidate.waitFor({ state: 'attached', timeout: 8_000 });
+        } catch {
+            return null;
+        }
     }
 
     if (await isVisible(candidate)) {
