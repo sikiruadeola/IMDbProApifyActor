@@ -43,6 +43,7 @@ const IMDB_PRO_ORIGIN = 'https://pro.imdb.com';
 const NAVIGATION_TIMEOUT = 120_000;
 const PROFILE_TIMEOUT = 120_000;
 const DIRECT_CONTACT_WAIT = 2_000;
+let diagnosticCaptured = false;
 
 // Any of these words showing up in a card means we have wandered into a
 // different category, not the person's own Direct Contact card. If a copied
@@ -375,6 +376,29 @@ async function readClipboard(page: Page): Promise<string> {
     }
 }
 
+async function captureDiagnosticsOnce(page: Page, imdbId: string): Promise<void> {
+    if (diagnosticCaptured) return;
+    diagnosticCaptured = true;
+
+    try {
+        const html = await page.content();
+        await Actor.setValue(`diagnostic-html-${imdbId}`, html, { contentType: 'text/html' });
+
+        const screenshot = await page.screenshot({ fullPage: true });
+        await Actor.setValue(`diagnostic-screenshot-${imdbId}`, screenshot, { contentType: 'image/png' });
+
+        const hasDirectContactText = html.toLowerCase().includes('direct-contact');
+        const hasDirectContactWord = html.toLowerCase().includes('direct contact');
+        console.log(
+            `DIAGNOSTIC CAPTURED for ${imdbId}: html length=${html.length}, ` +
+                `contains "direct-contact"=${hasDirectContactText}, ` +
+                `contains "direct contact"=${hasDirectContactWord}`,
+        );
+    } catch (error) {
+        console.log(`DIAGNOSTIC CAPTURE FAILED for ${imdbId}: ${errorMessage(error)}`);
+    }
+}
+
 async function extractDirectContact(page: Page): Promise<DirectContactResult> {
     try {
         const container = await findDirectContactContainer(page);
@@ -487,6 +511,9 @@ async function processProfile(page: Page, person: Person): Promise<PersonRecord 
         const contact = await extractDirectContact(page);
 
         if (contact.status !== 'found') {
+            if (contact.status === 'not_found') {
+                await captureDiagnosticsOnce(page, person.imdbId);
+            }
             console.log(`NO DIRECT CONTACT EMAIL: ${person.imdbId}. Nothing pushed to dataset.`);
             return null;
         }
