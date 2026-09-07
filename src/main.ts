@@ -271,26 +271,18 @@ async function discoverPeople(
     return people;
 }
 
-// Finds the exact heading node whose own text is just "Direct Contact",
-// nothing more. We deliberately reject anything whose text is long, since a
-// heading like this should only ever be a couple of words.
-async function findDirectContactHeading(page: Page): Promise<Locator | null> {
-    const candidateTags = ['div', 'span', 'h1', 'h2', 'h3', 'h4', 'h5', 'p', 'strong', 'b', 'dt', 'li'];
+// IMDbPro renders each contact category (Direct Contact, Company, Guild,
+// Talent Agent, and so on) as its own accordion item, and gives that
+// specific item's own container an id containing the category name itself,
+// for example accordion-item-direct-contact-item. This is a hard, stable
+// hook to the exact right section, no guessing from nearby text needed.
+async function findDirectContactContainer(page: Page): Promise<Locator | null> {
+    const candidates = page.locator('[id*="direct-contact" i]');
+    const count = await candidates.count().catch(() => 0);
 
-    for (const tag of candidateTags) {
-        const locator = page.locator(tag);
-        const count = await locator.count().catch(() => 0);
-
-        for (let i = 0; i < count; i++) {
-            const candidate = locator.nth(i);
-
-            if (!(await isVisible(candidate))) continue;
-
-            const text = normalizeText(await candidate.innerText().catch(() => ''));
-
-            if (text.length > 40) continue;
-            if (!/^direct\s*contact$/i.test(text)) continue;
-
+    for (let i = 0; i < count; i++) {
+        const candidate = candidates.nth(i);
+        if (await isVisible(candidate)) {
             return candidate;
         }
     }
@@ -299,7 +291,12 @@ async function findDirectContactHeading(page: Page): Promise<Locator | null> {
 }
 
 async function getCopyButtonWithin(container: Locator): Promise<Locator | null> {
+    // IMDbPro's own copy button in this section carries a stable internal
+    // label, copy-card-button, checked first since it is exact. The broader
+    // selectors below only run if that ever changes on their end.
     const selectors = [
+        'button[data-testid="copy-card-button"]',
+        '[role="button"][data-testid="copy-card-button"]',
         'button[aria-label*="copy" i]',
         '[role="button"][aria-label*="copy" i]',
         'button[title*="copy" i]',
@@ -308,10 +305,6 @@ async function getCopyButtonWithin(container: Locator): Promise<Locator | null> 
         '[role="button"][data-testid*="copy" i]',
         'button:has-text("Copy")',
         '[role="button"]:has-text("Copy")',
-        'button:has(svg[aria-label*="copy" i])',
-        'button:has(svg[title*="copy" i])',
-        '[role="button"]:has(svg[aria-label*="copy" i])',
-        '[role="button"]:has(svg[title*="copy" i])',
     ];
 
     for (const selector of selectors) {
@@ -329,43 +322,7 @@ async function getCopyButtonWithin(container: Locator): Promise<Locator | null> 
     return null;
 }
 
-// The Direct Contact heading and its own copy button live close together
-// on the page, but neighbouring cards (Company, Guild, Agent) sit nearby in
-// the same sidebar, so demanding a container completely free of their text
-// was too strict and skipped genuine Direct Contact cards. Instead we take
-// the smallest container, starting from the heading's own sibling and
-// widening one level at a time, that contains a copy button, with no purity
-// filtering at this stage. Whether that copy button truly belongs to Direct
-// Contact is decided afterwards, by checking the actual copied text, not by
-// guessing from surrounding DOM text beforehand.
-async function findNearestCopyButtonContainer(
-    heading: Locator,
-): Promise<Locator | null> {
-    const sibling = heading.locator('xpath=following-sibling::*[1]');
-    const siblingCount = await sibling.count().catch(() => 0);
 
-    if (siblingCount > 0 && (await isVisible(sibling))) {
-        const siblingCopyButton = await getCopyButtonWithin(sibling);
-        if (siblingCopyButton) {
-            return sibling;
-        }
-    }
-
-    for (let level = 1; level <= 6; level++) {
-        const container = heading.locator(`xpath=ancestor::*[${level}]`);
-        const count = await container.count().catch(() => 0);
-
-        if (count === 0) continue;
-
-        const copyButton = await getCopyButtonWithin(container);
-
-        if (copyButton) {
-            return container;
-        }
-    }
-
-    return null;
-}
 
 async function clearClipboard(page: Page): Promise<boolean> {
     try {
@@ -400,37 +357,34 @@ async function readClipboard(page: Page): Promise<string> {
 
 async function extractDirectContact(page: Page): Promise<DirectContactResult> {
     try {
-        const heading = await findDirectContactHeading(page);
+        const container = await findDirectContactContainer(page);
 
-        if (!heading) {
-            console.log('DIRECT CONTACT: heading not found on this profile. Nothing will be saved.');
+        if (!container) {
+            console.log('DIRECT CONTACT: section not found on this profile. Nothing will be saved.');
             return { raw: null, status: 'not_found', error: null };
         }
 
-        console.log('DIRECT CONTACT: heading found.');
+        console.log('DIRECT CONTACT: section found.');
 
-        // Some layouts render the section collapsed, some do not. Try a
-        // click, but do not treat a failed click as fatal, since the
-        // section may already be open.
-        await heading.click({ timeout: 8_000 }).catch(() => undefined);
-        await page.waitForTimeout(DIRECT_CONTACT_WAIT);
+        // The section is usually already expanded on page load, but if it is
+        // ever collapsed, its toggle control references it by this id, so
+        // try opening it first. A failed attempt here is not fatal.
+        const containerId = await container.getAttribute('id').catch(() => null);
 
-        const card = await findNearestCopyButtonContainer(heading);
+        if (containerId) {
+            const toggle = page.locator(`[aria-controls="${containerId}"]`);
+            const toggleCount = await toggle.count().catch(() => 0);
 
-        if (!card) {
-            console.log(
-                'DIRECT CONTACT: heading found but no nearby copy button could ' +
-                    'be located. Skipping rather than risk the wrong contact.',
-            );
-            return { raw: null, status: 'no_copy_button', error: null };
+            if (toggleCount > 0) {
+                await toggle.first().click({ timeout: 5_000 }).catch(() => undefined);
+                await page.waitForTimeout(DIRECT_CONTACT_WAIT);
+            }
         }
 
-        console.log('DIRECT CONTACT: nearest copy button located.');
-
-        const copyButton = await getCopyButtonWithin(card);
+        const copyButton = await getCopyButtonWithin(container);
 
         if (!copyButton) {
-            console.log('DIRECT CONTACT: card found but no copy button inside it.');
+            console.log('DIRECT CONTACT: section found but no copy button inside it.');
             return { raw: null, status: 'no_copy_button', error: null };
         }
 
