@@ -64,6 +64,10 @@ const OTHER_CATEGORY_KEYWORDS = [
     'agency',
 ];
 
+function randomJitterMs(baseMs: number, spreadMs: number): number {
+    return baseMs + Math.floor(Math.random() * spreadMs);
+}
+
 function errorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     return String(error);
@@ -494,7 +498,7 @@ async function processProfile(page: Page, person: Person): Promise<PersonRecord 
         // finishes loading. Waiting for that background activity to settle
         // is far more reliable than guessing a fixed number of seconds.
         await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
-        await page.waitForTimeout(1_500);
+        await page.waitForTimeout(randomJitterMs(1_200, 1_800));
 
         console.log(`PROFILE URL: ${page.url()}`);
 
@@ -602,11 +606,22 @@ try {
         console.log(`Could not set up Apify proxy, continuing without it: ${errorMessage(error)}`);
     }
 
-    browser = await chromium.launch({ headless: true, proxy: launchProxy });
+    browser = await chromium.launch({
+        headless: true,
+        proxy: launchProxy,
+        args: ['--disable-blink-features=AutomationControlled'],
+    });
 
     context = await browser.newContext({
         storageState: authState as any,
         viewport: { width: 1920, height: 1080 },
+        userAgent:
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+            '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        locale: 'en-US',
+        extraHTTPHeaders: {
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
     });
 
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
@@ -659,6 +674,11 @@ try {
             }
 
             console.log(`PROGRESS: processed=${totalProcessed}, saved=${totalSaved}`);
+
+            // A real person never opens profiles back to back at a perfectly
+            // even pace. A small random pause between each one is cheap and
+            // avoids the most obvious automated signature: uniform timing.
+            await profilePage.waitForTimeout(randomJitterMs(800, 2_200));
         }
 
         if (maxProfiles > 0 && totalProcessed >= maxProfiles) {
