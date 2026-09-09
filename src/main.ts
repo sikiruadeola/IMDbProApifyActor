@@ -429,52 +429,35 @@ async function extractDirectContact(page: Page): Promise<DirectContactResult> {
             }
         }
 
-        const copyButton = await getCopyButtonWithin(container);
+        // Clipboard copying through an automated browser is unreliable, it
+        // came back empty in testing even after a successful click. Reading
+        // the section's own visible text directly is just as accurate and
+        // does not depend on that flaky step at all.
+        const rawText = normalizeText(await container.innerText().catch(() => ''));
+        console.log(`DIRECT CONTACT: section text length = ${rawText.length}`);
 
-        if (!copyButton) {
-            console.log('DIRECT CONTACT: section found but no copy button inside it.');
-            return { raw: null, status: 'no_copy_button', error: null };
-        }
-
-        const clipboardCleared = await clearClipboard(page);
-
-        if (!clipboardCleared) {
-            console.log(
-                'DIRECT CONTACT: could not clear clipboard. Refusing to trust ' +
-                    'possibly stale clipboard data.',
-            );
-            return { raw: null, status: 'error', error: 'Could not clear clipboard before copying.' };
-        }
-
-        console.log('DIRECT CONTACT: clicking copy button...');
-        await copyButton.click({ timeout: 15_000 });
-        await page.waitForTimeout(750);
-
-        const clipboardText = await readClipboard(page);
-        console.log(`DIRECT CONTACT: clipboard length = ${clipboardText.length}`);
-
-        if (!clipboardText) {
-            console.log('DIRECT CONTACT: clipboard was empty. Nothing will be saved.');
+        if (!rawText) {
+            console.log('DIRECT CONTACT: section had no readable text. Nothing will be saved.');
             return { raw: null, status: 'no_email', error: null };
         }
 
-        if (containsOtherCategory(clipboardText)) {
+        if (containsOtherCategory(rawText)) {
             console.log(
-                'DIRECT CONTACT: copied text still mentions another category ' +
+                'DIRECT CONTACT: section text still mentions another category ' +
                     '(Company, Guild, Agent, etc). Refusing to save this one.',
             );
-            return { raw: clipboardText, status: 'leaked', error: null };
+            return { raw: rawText, status: 'leaked', error: null };
         }
 
-        const email = extractEmail(clipboardText);
+        const email = extractEmail(rawText);
 
         if (!email) {
-            console.log('DIRECT CONTACT: copied content has no valid email. Nothing will be saved.');
-            return { raw: clipboardText, status: 'no_email', error: null };
+            console.log('DIRECT CONTACT: section text has no valid email. Nothing will be saved.');
+            return { raw: rawText, status: 'no_email', error: null };
         }
 
         console.log(`DIRECT CONTACT EMAIL CONFIRMED: ${email}`);
-        return { raw: clipboardText, status: 'found', error: null };
+        return { raw: rawText, status: 'found', error: null };
     } catch (error) {
         const message = errorMessage(error);
         console.error(`DIRECT CONTACT ERROR: ${message}`);
