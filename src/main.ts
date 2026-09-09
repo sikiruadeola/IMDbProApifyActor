@@ -561,62 +561,106 @@ try {
     console.log('Dataset behaviour: SAVE IMMEDIATELY AFTER EACH VALID DIRECT CONTACT');
 
     // Route everything through Apify's own proxy addresses, included free
-    // on every plan, instead of the container's single fixed address. One
-    // session id is used for the whole run so IMDbPro sees one consistent
-    // address throughout, rather than switching mid session.
-    let launchProxy: { server: string; username?: string; password?: string } | undefined;
+    // on every plan, instead of the container's single fixed address. The
+    // free pool only has a handful of addresses in it, and one of them
+    // occasionally times out entirely, so a fresh address is requested and
+    // the whole browser relaunched if that happens, rather than giving up
+    // on the very first bad connection.
+    async function buildProxyForNewSession(): Promise<
+        { server: string; username?: string; password?: string } | undefined
+    > {
+        try {
+            const proxyConfiguration = await Actor.createProxyConfiguration();
 
-    try {
-        const proxyConfiguration = await Actor.createProxyConfiguration();
+            if (!proxyConfiguration) return undefined;
 
-        if (proxyConfiguration) {
             const sessionId = `imdbpro_${Math.floor(Math.random() * 1_000_000)}`;
             const proxyUrl = await proxyConfiguration.newUrl(sessionId);
 
-            if (proxyUrl) {
-                const parsed = new URL(proxyUrl);
+            if (!proxyUrl) return undefined;
 
-                launchProxy = {
-                    server: `${parsed.protocol}//${parsed.host}`,
-                    username: decodeURIComponent(parsed.username),
-                    password: decodeURIComponent(parsed.password),
-                };
+            const parsed = new URL(proxyUrl);
 
-                console.log('Using Apify proxy for this run.');
-            }
+            return {
+                server: `${parsed.protocol}//${parsed.host}`,
+                username: decodeURIComponent(parsed.username),
+                password: decodeURIComponent(parsed.password),
+            };
+        } catch (error) {
+            console.log(`Could not set up Apify proxy, continuing without it: ${errorMessage(error)}`);
+            return undefined;
         }
-    } catch (error) {
-        console.log(`Could not set up Apify proxy, continuing without it: ${errorMessage(error)}`);
     }
 
-    browser = await chromium.launch({
-        headless: true,
-        proxy: launchProxy,
-        args: ['--disable-blink-features=AutomationControlled'],
-    });
+    async function launchBrowserAndContext(): Promise<{ browser: Browser; context: BrowserContext }> {
+        const launchProxy = await buildProxyForNewSession();
 
-    context = await browser.newContext({
-        storageState: authState as any,
-        viewport: { width: 1920, height: 1080 },
-        userAgent:
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-            '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-        locale: 'en-US',
-        extraHTTPHeaders: {
-            'Accept-Language': 'en-US,en;q=0.9',
-        },
-    });
+        if (launchProxy) {
+            console.log('Using a fresh Apify proxy address for this attempt.');
+        }
 
-    await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
-        origin: IMDB_PRO_ORIGIN,
-    });
+        const newBrowser = await chromium.launch({
+            headless: true,
+            proxy: launchProxy,
+            args: ['--disable-blink-features=AutomationControlled'],
+        });
 
-    const authPage = await context.newPage();
+        const newContext = await newBrowser.newContext({
+            storageState: authState as any,
+            viewport: { width: 1920, height: 1080 },
+            userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+                '(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+            locale: 'en-US',
+            extraHTTPHeaders: {
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+        });
 
-    try {
-        await verifyAuthentication(authPage, startUrl);
-    } finally {
-        await authPage.close().catch(() => undefined);
+        await newContext.grantPermissions(['clipboard-read', 'clipboard-write'], {
+            origin: IMDB_PRO_ORIGIN,
+        });
+
+        return { browser: newBrowser, context: newContext };
+    }
+
+    const MAX_LAUNCH_ATTEMPTS = 3;
+
+    for (let attempt = 1; attempt <= MAX_LAUNCH_ATTEMPTS; attempt++) {
+        console.log(`\nLaunch attempt ${attempt} of ${MAX_LAUNCH_ATTEMPTS}...`);
+
+        const launched = await launchBrowserAndContext();
+        browser = launched.browser;
+        context = launched.context;
+
+        const authPage = await context.newPage();
+
+        try {
+            await verifyAuthentication(authPage, startUrl);
+            await authPage.close().catch(() => undefined);
+            break;
+        } catch (error) {
+            await authPage.close().catch(() => undefined);
+
+            const isConnectionIssue = errorMessage(error).includes('ERR_TIMED_OUT') ||
+                errorMessage(error).includes('ERR_CONNECTION') ||
+                errorMessage(error).includes('ERR_PROXY');
+
+            if (isConnectionIssue && attempt < MAX_LAUNCH_ATTEMPTS) {
+                console.log(
+                    `Connection level failure on this proxy address, trying a fresh one: ${errorMessage(error)}`,
+                );
+                await launched.context.close().catch(() => undefined);
+                await launched.browser.close().catch(() => undefined);
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    if (!context || !browser) {
+        throw new Error('Browser context was not established after all launch attempts.');
     }
 
     const discoveryPage = await context.newPage();
