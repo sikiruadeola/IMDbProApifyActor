@@ -251,6 +251,22 @@ async function discoverPeople(
 
     console.log(`NAME LINKS FOUND ON PAGE ${pageNumber}: ${count}`);
 
+    if (count === 0) {
+        try {
+            const html = await page.content();
+            await Actor.setValue(`diagnostic-discovery-page-${pageNumber}-html`, html, {
+                contentType: 'text/html',
+            });
+            const screenshot = await page.screenshot({ fullPage: true });
+            await Actor.setValue(`diagnostic-discovery-page-${pageNumber}-screenshot`, screenshot, {
+                contentType: 'image/png',
+            });
+            console.log(`DIAGNOSTIC CAPTURED for empty discovery page ${pageNumber}, html length=${html.length}`);
+        } catch (error) {
+            console.log(`Diagnostic capture failed for page ${pageNumber}: ${errorMessage(error)}`);
+        }
+    }
+
     const people: Person[] = [];
     const pageIds = new Set<string>();
 
