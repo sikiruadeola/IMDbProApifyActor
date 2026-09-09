@@ -223,7 +223,8 @@ async function discoverPeople(
             });
 
             console.log('Waiting for IMDbPro results...');
-            await page.waitForTimeout(5_000);
+            await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => undefined);
+            await page.waitForTimeout(1_500);
 
             loaded = true;
             break;
