@@ -31,6 +31,7 @@ interface DirectContactResult {
 interface PersonRecord {
     discoveryPage: number;
     directContactRaw: string;
+    profileUrl: string;
 }
 
 // Paste your own exported Playwright storage state JSON here between the
@@ -525,6 +526,7 @@ async function processProfile(page: Page, person: Person): Promise<PersonRecord 
         const record: PersonRecord = {
             discoveryPage: person.discoveryPage,
             directContactRaw: contact.raw ?? '',
+            profileUrl: person.profileUrl,
         };
 
         await Actor.pushData(record);
@@ -690,14 +692,42 @@ try {
     let totalSaved = 0;
     let pageNumber = startingPage;
 
-    while (maxPages === 0 || pageNumber < startingPage + maxPages) {
-        const people = await discoverPeople(discoveryPage, pageNumber, startUrl);
+    let consecutiveEmptyPages = 0;
+    const MAX_CONSECUTIVE_EMPTY_PAGES = 3;
 
+    while (maxPages === 0 || pageNumber < startingPage + maxPages) {
+        let people = await discoverPeople(discoveryPage, pageNumber, startUrl);
+
+        // A single empty result can be a bad page load rather than a real
+        // end of the range, we saw this happen on a page that actually had
+        // ninety three real people on it. Retry the same page fresh before
+        // trusting an empty result at all.
         if (people.length === 0) {
-            console.log(`No people found on page ${pageNumber}. Stopping pagination.`);
-            break;
+            console.log(`Page ${pageNumber} came back empty, retrying once before trusting that.`);
+            await discoveryPage.waitForTimeout(randomJitterMs(2_000, 2_000));
+            people = await discoverPeople(discoveryPage, pageNumber, startUrl);
         }
 
+        if (people.length === 0) {
+            consecutiveEmptyPages++;
+            console.log(
+                `Page ${pageNumber} empty on retry too. Consecutive empty pages: ` +
+                    `${consecutiveEmptyPages}/${MAX_CONSECUTIVE_EMPTY_PAGES}.`,
+            );
+
+            if (consecutiveEmptyPages >= MAX_CONSECUTIVE_EMPTY_PAGES) {
+                console.log(
+                    `${MAX_CONSECUTIVE_EMPTY_PAGES} pages in a row came back empty, ` +
+                        'treating this as the real end of the range.',
+                );
+                break;
+            }
+
+            pageNumber++;
+            continue;
+        }
+
+        consecutiveEmptyPages = 0;
         totalDiscovered += people.length;
 
         for (const person of people) {
