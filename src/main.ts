@@ -682,8 +682,8 @@ try {
         throw new Error('Browser context was not established after all launch attempts.');
     }
 
-    const discoveryPage = await context.newPage();
-    const profilePage = await context.newPage();
+    let discoveryPage = await context.newPage();
+    let profilePage = await context.newPage();
 
     const seenImdbIds = new Set<string>();
 
@@ -695,8 +695,43 @@ try {
     let consecutiveEmptyPages = 0;
     const MAX_CONSECUTIVE_EMPTY_PAGES = 3;
 
+    // A page that keeps timing out at the connection level is a sign the
+    // current proxy address has gone bad mid run, not that IMDbPro has run
+    // out of people. When that happens the whole browser gets relaunched
+    // with a freshly requested address, the same recovery already used
+    // before the run starts, just available again if needed later on too.
+    async function relaunchWithFreshProxy(): Promise<void> {
+        console.log('Relaunching the browser with a fresh proxy address after a connection level failure.');
+        await context!.close().catch(() => undefined);
+        await browser!.close().catch(() => undefined);
+
+        const relaunched = await launchBrowserAndContext();
+        browser = relaunched.browser;
+        context = relaunched.context;
+
+        discoveryPage = await context.newPage();
+        profilePage = await context.newPage();
+    }
+
+    async function discoverPeopleWithRecovery(pageNum: number): Promise<Person[]> {
+        try {
+            return await discoverPeople(discoveryPage, pageNum, startUrl);
+        } catch (error) {
+            const isConnectionIssue =
+                errorMessage(error).includes('Timeout') ||
+                errorMessage(error).includes('ERR_TIMED_OUT') ||
+                errorMessage(error).includes('ERR_CONNECTION') ||
+                errorMessage(error).includes('ERR_PROXY');
+
+            if (!isConnectionIssue) throw error;
+
+            await relaunchWithFreshProxy();
+            return discoverPeople(discoveryPage, pageNum, startUrl);
+        }
+    }
+
     while (maxPages === 0 || pageNumber < startingPage + maxPages) {
-        let people = await discoverPeople(discoveryPage, pageNumber, startUrl);
+        let people = await discoverPeopleWithRecovery(pageNumber);
 
         // A single empty result can be a bad page load rather than a real
         // end of the range, we saw this happen on a page that actually had
@@ -705,7 +740,7 @@ try {
         if (people.length === 0) {
             console.log(`Page ${pageNumber} came back empty, retrying once before trusting that.`);
             await discoveryPage.waitForTimeout(randomJitterMs(2_000, 2_000));
-            people = await discoverPeople(discoveryPage, pageNumber, startUrl);
+            people = await discoverPeopleWithRecovery(pageNumber);
         }
 
         if (people.length === 0) {
