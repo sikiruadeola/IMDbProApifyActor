@@ -329,11 +329,31 @@ async function findDirectContactContainer(page: Page): Promise<Locator | null> {
         }
     }
 
-    if (await isVisible(candidate)) {
-        return candidate;
+    if (!(await isVisible(candidate))) {
+        return null;
     }
 
-    return null;
+    // The id sometimes sits on the small heading label itself rather than
+    // the card holding the actual value underneath it, which used to mean
+    // only the word "Direct Contact" got read and nothing else. Climb a few
+    // parent levels until there is real content, but stop the moment a
+    // neighbouring card's own category words show up, so this never mixes
+    // in Company or Agent information from outside this specific card.
+    let current = candidate;
+    for (let level = 0; level < 3; level++) {
+        const text = normalizeText(await current.innerText().catch(() => ''));
+        if (text.length > 20) {
+            return current;
+        }
+        const parent = current.locator('xpath=..');
+        const parentText = normalizeText(await parent.innerText().catch(() => ''));
+        if (containsOtherCategory(parentText) && !containsOtherCategory(text)) {
+            return current;
+        }
+        current = parent;
+    }
+
+    return current;
 }
 
 async function getCopyButtonWithin(container: Locator): Promise<Locator | null> {
